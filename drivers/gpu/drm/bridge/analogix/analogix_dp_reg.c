@@ -1,34 +1,27 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Analogix DP (Display port) core register interface driver.
  *
  * Copyright (C) 2012 Samsung Electronics Co., Ltd.
  * Author: Jingoo Han <jg1.han@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  */
 
-#include <linux/device.h>
-#include <linux/io.h>
 #include <linux/delay.h>
-#include <linux/gpio.h>
+#include <linux/device.h>
+#include <linux/gpio/consumer.h>
+#include <linux/io.h>
+#include <linux/iopoll.h>
+#include <linux/phy/phy.h>
 
 #include <drm/bridge/analogix_dp.h>
+#include <drm/drm_probe_helper.h>
 
 #include "analogix_dp_core.h"
 #include "analogix_dp_reg.h"
 
-#define COMMON_INT_MASK_1	0
-#define COMMON_INT_MASK_2	0
-#define COMMON_INT_MASK_3	0
-#define COMMON_INT_MASK_4	(HOTPLUG_CHG | HPD_LOST | PLUG)
-#define INT_STA_MASK		INT_HPD
-
 static void analogix_dp_write(struct analogix_dp_device *dp, u32 reg, u32 val)
 {
-	if (dp->plat_data && dp->plat_data->dev_type == ROCKCHIP_DP) {
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type)) {
 		readl(dp->reg_base);
 		writel(val, dp->reg_base + reg);
 	}
@@ -38,7 +31,7 @@ static void analogix_dp_write(struct analogix_dp_device *dp, u32 reg, u32 val)
 
 static u32 analogix_dp_read(struct analogix_dp_device *dp, u32 reg)
 {
-	if (dp->plat_data && dp->plat_data->dev_type == ROCKCHIP_DP)
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
 		readl(dp->reg_base + reg);
 
 	return readl(dp->reg_base + reg);
@@ -68,16 +61,13 @@ void analogix_dp_stop_video(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_VIDEO_CTL_1, reg);
 }
 
-void analogix_dp_lane_swap(struct analogix_dp_device *dp, bool enable)
+static void analogix_dp_set_lane_map(struct analogix_dp_device *dp)
 {
-	u32 reg;
+	struct video_info *video_info = &dp->video_info;
+	u32 i, reg = 0;
 
-	if (enable)
-		reg = LANE3_MAP_LOGIC_LANE_0 | LANE2_MAP_LOGIC_LANE_1 |
-		      LANE1_MAP_LOGIC_LANE_2 | LANE0_MAP_LOGIC_LANE_3;
-	else
-		reg = LANE3_MAP_LOGIC_LANE_3 | LANE2_MAP_LOGIC_LANE_2 |
-		      LANE1_MAP_LOGIC_LANE_1 | LANE0_MAP_LOGIC_LANE_0;
+	for (i = 0; i < video_info->max_lane_count; i++)
+		reg |= video_info->lane_map[i] << (2 * i);
 
 	analogix_dp_write(dp, ANALOGIX_DP_LANE_MAP, reg);
 }
@@ -92,10 +82,9 @@ void analogix_dp_init_analog_param(struct analogix_dp_device *dp)
 	reg = SEL_24M | TX_DVDD_BIT_1_0625V;
 	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_2, reg);
 
-	if (dp->plat_data && (dp->plat_data->dev_type == ROCKCHIP_DP)) {
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type)) {
 		reg = REF_CLK_24M;
-		if (dp->plat_data->subdev_type == RK3288_DP ||
-		    dp->plat_data->subdev_type == RK3368_EDP)
+		if (dp->plat_data->dev_type == RK3288_DP)
 			reg ^= REF_CLK_MASK;
 
 		analogix_dp_write(dp, ANALOGIX_DP_PLL_REG_1, reg);
@@ -116,8 +105,6 @@ void analogix_dp_init_analog_param(struct analogix_dp_device *dp)
 	reg = CH3_AMP_400_MV | CH2_AMP_400_MV |
 		CH1_AMP_400_MV | CH0_AMP_400_MV;
 	analogix_dp_write(dp, ANALOGIX_DP_TX_AMP_TUNING_CTL, reg);
-
-	analogix_dp_write(dp, ANALOGIX_DP_AUX, 0x4);
 }
 
 void analogix_dp_init_interrupt(struct analogix_dp_device *dp)
@@ -147,9 +134,14 @@ void analogix_dp_reset(struct analogix_dp_device *dp)
 	analogix_dp_stop_video(dp);
 	analogix_dp_enable_video_mute(dp, 0);
 
-	reg = MASTER_VID_FUNC_EN_N | SLAVE_VID_FUNC_EN_N |
-		AUD_FIFO_FUNC_EN_N | AUD_FUNC_EN_N |
-		HDCP_FUNC_EN_N | SW_FUNC_EN_N;
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
+		reg = RK_VID_CAP_FUNC_EN_N | RK_VID_FIFO_FUNC_EN_N |
+			SW_FUNC_EN_N;
+	else
+		reg = MASTER_VID_FUNC_EN_N | SLAVE_VID_FUNC_EN_N |
+			AUD_FIFO_FUNC_EN_N | AUD_FUNC_EN_N |
+			HDCP_FUNC_EN_N | SW_FUNC_EN_N;
+
 	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_1, reg);
 
 	reg = SSC_FUNC_EN_N | AUX_FUNC_EN_N |
@@ -159,7 +151,7 @@ void analogix_dp_reset(struct analogix_dp_device *dp)
 
 	usleep_range(20, 30);
 
-	analogix_dp_lane_swap(dp, 0);
+	analogix_dp_set_lane_map(dp);
 
 	analogix_dp_write(dp, ANALOGIX_DP_SYS_CTL_1, 0x0);
 	analogix_dp_write(dp, ANALOGIX_DP_SYS_CTL_2, 0x40);
@@ -168,9 +160,6 @@ void analogix_dp_reset(struct analogix_dp_device *dp)
 
 	analogix_dp_write(dp, ANALOGIX_DP_PKT_SEND_CTL, 0x0);
 	analogix_dp_write(dp, ANALOGIX_DP_HDCP_CTL, 0x0);
-
-	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_L, 0x5e);
-	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_H, 0x1a);
 
 	analogix_dp_write(dp, ANALOGIX_DP_LINK_DEBUG_CTL, 0x10);
 
@@ -192,23 +181,15 @@ void analogix_dp_swreset(struct analogix_dp_device *dp)
 
 void analogix_dp_config_interrupt(struct analogix_dp_device *dp)
 {
-	u32 reg;
-
 	/* 0: mask, 1: unmask */
-	reg = COMMON_INT_MASK_1;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_1, reg);
+	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_1, 0);
+	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_2, 0);
+	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_3, 0);
 
-	reg = COMMON_INT_MASK_2;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_2, reg);
-
-	reg = COMMON_INT_MASK_3;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_3, reg);
-
-	reg = COMMON_INT_MASK_4;
-	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_4, reg);
-
-	reg = INT_STA_MASK;
-	analogix_dp_write(dp, ANALOGIX_DP_INT_STA_MASK, reg);
+	if (dp->force_hpd || dp->hpd_gpiod)
+		analogix_dp_mute_hpd_interrupt(dp);
+	else
+		analogix_dp_unmute_hpd_interrupt(dp);
 }
 
 void analogix_dp_mute_hpd_interrupt(struct analogix_dp_device *dp)
@@ -217,11 +198,11 @@ void analogix_dp_mute_hpd_interrupt(struct analogix_dp_device *dp)
 
 	/* 0: mask, 1: unmask */
 	reg = analogix_dp_read(dp, ANALOGIX_DP_COMMON_INT_MASK_4);
-	reg &= ~COMMON_INT_MASK_4;
+	reg &= ~HOTPLUG_CHG;
 	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_4, reg);
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA_MASK);
-	reg &= ~INT_STA_MASK;
+	reg &= ~INT_HPD;
 	analogix_dp_write(dp, ANALOGIX_DP_INT_STA_MASK, reg);
 }
 
@@ -230,10 +211,12 @@ void analogix_dp_unmute_hpd_interrupt(struct analogix_dp_device *dp)
 	u32 reg;
 
 	/* 0: mask, 1: unmask */
-	reg = COMMON_INT_MASK_4;
+	reg = analogix_dp_read(dp, ANALOGIX_DP_COMMON_INT_MASK_4);
+	reg |= HOTPLUG_CHG;
 	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_MASK_4, reg);
 
-	reg = INT_STA_MASK;
+	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA_MASK);
+	reg |= INT_HPD;
 	analogix_dp_write(dp, ANALOGIX_DP_INT_STA_MASK, reg);
 }
 
@@ -251,16 +234,20 @@ enum pll_status analogix_dp_get_pll_lock_status(struct analogix_dp_device *dp)
 void analogix_dp_set_pll_power_down(struct analogix_dp_device *dp, bool enable)
 {
 	u32 reg;
+	u32 mask = DP_PLL_PD;
+	u32 pd_addr = ANALOGIX_DP_PLL_CTL;
 
-	if (enable) {
-		reg = analogix_dp_read(dp, ANALOGIX_DP_PLL_CTL);
-		reg |= DP_PLL_PD;
-		analogix_dp_write(dp, ANALOGIX_DP_PLL_CTL, reg);
-	} else {
-		reg = analogix_dp_read(dp, ANALOGIX_DP_PLL_CTL);
-		reg &= ~DP_PLL_PD;
-		analogix_dp_write(dp, ANALOGIX_DP_PLL_CTL, reg);
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type)) {
+		pd_addr = ANALOGIX_DP_PD;
+		mask = RK_PLL_PD;
 	}
+
+	reg = analogix_dp_read(dp, pd_addr);
+	if (enable)
+		reg |= mask;
+	else
+		reg &= ~mask;
+	analogix_dp_write(dp, pd_addr, reg);
 }
 
 void analogix_dp_set_analog_power_down(struct analogix_dp_device *dp,
@@ -269,83 +256,100 @@ void analogix_dp_set_analog_power_down(struct analogix_dp_device *dp,
 {
 	u32 reg;
 	u32 phy_pd_addr = ANALOGIX_DP_PHY_PD;
+	u32 mask;
 
-	if (dp->plat_data && (dp->plat_data->dev_type == ROCKCHIP_DP))
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
 		phy_pd_addr = ANALOGIX_DP_PD;
 
 	switch (block) {
 	case AUX_BLOCK:
+		if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
+			mask = RK_AUX_PD;
+		else
+			mask = AUX_PD;
+
+		reg = analogix_dp_read(dp, phy_pd_addr);
 		if (enable) {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg |= AUX_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
+			reg &= ~(DP_INC_BG | DP_EXP_BG);
+			reg |= mask;
 		} else {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg &= ~AUX_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
+			reg &= ~mask;
 		}
+		analogix_dp_write(dp, phy_pd_addr, reg);
 		break;
 	case CH0_BLOCK:
-		if (enable) {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg |= CH0_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		} else {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg &= ~CH0_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		}
+		mask = CH0_PD;
+		reg = analogix_dp_read(dp, phy_pd_addr);
+
+		if (enable)
+			reg |= mask;
+		else
+			reg &= ~mask;
+		analogix_dp_write(dp, phy_pd_addr, reg);
 		break;
 	case CH1_BLOCK:
-		if (enable) {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg |= CH1_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		} else {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg &= ~CH1_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		}
+		mask = CH1_PD;
+		reg = analogix_dp_read(dp, phy_pd_addr);
+
+		if (enable)
+			reg |= mask;
+		else
+			reg &= ~mask;
+		analogix_dp_write(dp, phy_pd_addr, reg);
 		break;
 	case CH2_BLOCK:
-		if (enable) {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg |= CH2_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		} else {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg &= ~CH2_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		}
+		mask = CH2_PD;
+		reg = analogix_dp_read(dp, phy_pd_addr);
+
+		if (enable)
+			reg |= mask;
+		else
+			reg &= ~mask;
+		analogix_dp_write(dp, phy_pd_addr, reg);
 		break;
 	case CH3_BLOCK:
-		if (enable) {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg |= CH3_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		} else {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg &= ~CH3_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		}
+		mask = CH3_PD;
+		reg = analogix_dp_read(dp, phy_pd_addr);
+
+		if (enable)
+			reg |= mask;
+		else
+			reg &= ~mask;
+		analogix_dp_write(dp, phy_pd_addr, reg);
 		break;
 	case ANALOG_TOTAL:
-		if (enable) {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg |= DP_PHY_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		} else {
-			reg = analogix_dp_read(dp, phy_pd_addr);
-			reg &= ~DP_PHY_PD;
-			analogix_dp_write(dp, phy_pd_addr, reg);
-		}
+		/*
+		 * There is no bit named DP_PHY_PD, so We used DP_INC_BG
+		 * to power off everything instead of DP_PHY_PD in
+		 * Rockchip
+		 */
+		if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
+			mask = DP_INC_BG;
+		else
+			mask = DP_PHY_PD;
+
+		reg = analogix_dp_read(dp, phy_pd_addr);
+		if (enable)
+			reg |= mask;
+		else
+			reg &= ~mask;
+
+		analogix_dp_write(dp, phy_pd_addr, reg);
+		if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
+			usleep_range(10, 15);
 		break;
 	case POWER_ALL:
 		if (enable) {
-			reg = DP_PHY_PD | AUX_PD | CH3_PD | CH2_PD |
-				CH1_PD | CH0_PD;
+			reg = DP_ALL_PD;
 			analogix_dp_write(dp, phy_pd_addr, reg);
 		} else {
+			reg = DP_ALL_PD;
+			analogix_dp_write(dp, phy_pd_addr, reg);
+			usleep_range(10, 15);
+			reg &= ~DP_INC_BG;
+			analogix_dp_write(dp, phy_pd_addr, reg);
+			usleep_range(10, 15);
+
 			analogix_dp_write(dp, phy_pd_addr, 0x00);
 		}
 		break;
@@ -354,10 +358,9 @@ void analogix_dp_set_analog_power_down(struct analogix_dp_device *dp,
 	}
 }
 
-void analogix_dp_init_analog_func(struct analogix_dp_device *dp)
+int analogix_dp_init_analog_func(struct analogix_dp_device *dp)
 {
 	u32 reg;
-	int timeout_loop = 0;
 
 	analogix_dp_set_analog_power_down(dp, POWER_ALL, 0);
 
@@ -369,29 +372,22 @@ void analogix_dp_init_analog_func(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_DEBUG_CTL, reg);
 
 	/* Power up PLL */
-	if (analogix_dp_get_pll_lock_status(dp) == PLL_UNLOCKED) {
-		analogix_dp_set_pll_power_down(dp, 0);
-
-		while (analogix_dp_get_pll_lock_status(dp) == PLL_UNLOCKED) {
-			timeout_loop++;
-			if (DP_TIMEOUT_LOOP_COUNT < timeout_loop) {
-				dev_err(dp->dev, "failed to get pll lock status\n");
-				return;
-			}
-			usleep_range(10, 20);
-		}
-	}
+	analogix_dp_set_pll_power_down(dp, 0);
 
 	/* Enable Serdes FIFO function and Link symbol clock domain module */
 	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_2);
 	reg &= ~(SERDES_FIFO_FUNC_EN_N | LS_CLK_DOMAIN_FUNC_EN_N
 		| AUX_FUNC_EN_N);
 	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_2, reg);
+	return 0;
 }
 
 void analogix_dp_clear_hotplug_interrupts(struct analogix_dp_device *dp)
 {
 	u32 reg;
+
+	if (dp->hpd_gpiod)
+		return;
 
 	reg = HOTPLUG_CHG | HPD_LOST | PLUG;
 	analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_STA_4, reg);
@@ -404,7 +400,11 @@ void analogix_dp_init_hpd(struct analogix_dp_device *dp)
 {
 	u32 reg;
 
-	analogix_dp_clear_hotplug_interrupts(dp);
+	if (dp->hpd_gpiod)
+		return;
+
+	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_H, 0xbb);
+	analogix_dp_write(dp, ANALOGIX_DP_HPD_DEGLITCH_L, 0x80);
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_3);
 	reg &= ~(F_HPD | HPD_CTRL);
@@ -420,23 +420,30 @@ void analogix_dp_force_hpd(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_SYS_CTL_3, reg);
 }
 
-enum dp_irq_type analogix_dp_get_irq_type(struct analogix_dp_device *dp)
+static void analogix_dp_handle_hpd_event(struct analogix_dp_device *dp)
 {
+	bool changed = false;
 	u32 reg;
 
-	/* Parse hotplug interrupt status register */
+	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA);
+	if (reg & INT_HPD) {
+		dev_info(dp->dev, "irq-hpd, it's being ignored for now\n");
+		analogix_dp_write(dp, ANALOGIX_DP_INT_STA, INT_HPD);
+	}
+
 	reg = analogix_dp_read(dp, ANALOGIX_DP_COMMON_INT_STA_4);
+	if (reg & HOTPLUG_CHG) {
+		analogix_dp_write(dp, ANALOGIX_DP_COMMON_INT_STA_4, HOTPLUG_CHG);
+		changed = true;
+	}
 
-	if (reg & PLUG)
-		return DP_IRQ_TYPE_HP_CABLE_IN;
+	if (changed)
+		drm_helper_hpd_irq_event(dp->drm_dev);
+}
 
-	if (reg & HPD_LOST)
-		return DP_IRQ_TYPE_HP_CABLE_OUT;
-
-	if (reg & HOTPLUG_CHG)
-		return DP_IRQ_TYPE_HP_CHANGE;
-
-	return DP_IRQ_TYPE_UNKNOWN;
+void analogix_dp_irq_handler(struct analogix_dp_device *dp)
+{
+	analogix_dp_handle_hpd_event(dp);
 }
 
 void analogix_dp_reset_aux(struct analogix_dp_device *dp)
@@ -457,17 +464,22 @@ void analogix_dp_init_aux(struct analogix_dp_device *dp)
 	reg = RPLY_RECEIV | AUX_ERR;
 	analogix_dp_write(dp, ANALOGIX_DP_INT_STA, reg);
 
+	analogix_dp_set_analog_power_down(dp, AUX_BLOCK, true);
+	usleep_range(10, 11);
+	analogix_dp_set_analog_power_down(dp, AUX_BLOCK, false);
+
 	analogix_dp_reset_aux(dp);
 
-	/* Disable AUX transaction H/W retry */
-	if (dp->plat_data && (dp->plat_data->dev_type == ROCKCHIP_DP))
-		reg = AUX_BIT_PERIOD_EXPECTED_DELAY(0) |
-		      AUX_HW_RETRY_COUNT_SEL(3) |
-		      AUX_HW_RETRY_INTERVAL_600_MICROSECONDS;
+	/* AUX_BIT_PERIOD_EXPECTED_DELAY doesn't apply to Rockchip IP */
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type))
+		reg = 0;
 	else
-		reg = AUX_BIT_PERIOD_EXPECTED_DELAY(3) |
-		      AUX_HW_RETRY_COUNT_SEL(0) |
-		      AUX_HW_RETRY_INTERVAL_600_MICROSECONDS;
+		reg = AUX_BIT_PERIOD_EXPECTED_DELAY(3);
+
+	/* Disable AUX transaction H/W retry */
+	reg |= AUX_HW_RETRY_COUNT_SEL(0) |
+	       AUX_HW_RETRY_INTERVAL_600_MICROSECONDS;
+
 	analogix_dp_write(dp, ANALOGIX_DP_AUX_HW_RETRY_CTL, reg);
 
 	/* Receive AUX Channel DEFER commands equal to DEFFER_COUNT*64 */
@@ -475,6 +487,7 @@ void analogix_dp_init_aux(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_AUX_CH_DEFER_CTL, reg);
 
 	/* Enable AUX channel module */
+	analogix_dp_enable_sw_function(dp);
 	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_2);
 	reg &= ~AUX_FUNC_EN_N;
 	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_2, reg);
@@ -484,9 +497,14 @@ int analogix_dp_get_plug_in_status(struct analogix_dp_device *dp)
 {
 	u32 reg;
 
-	reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_3);
-	if (reg & HPD_STATUS)
-		return 0;
+	if (dp->hpd_gpiod) {
+		if (gpiod_get_value(dp->hpd_gpiod))
+			return 0;
+	} else {
+		reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_3);
+		if (reg & HPD_STATUS)
+			return 0;
+	}
 
 	return -EINVAL;
 }
@@ -500,12 +518,75 @@ void analogix_dp_enable_sw_function(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_1, reg);
 }
 
-void analogix_dp_set_link_bandwidth(struct analogix_dp_device *dp, u32 bwtype)
+static void analogix_dp_ssc_enable(struct analogix_dp_device *dp)
 {
 	u32 reg;
 
-	reg = bwtype;
-	analogix_dp_write(dp, ANALOGIX_DP_LINK_BW_SET, reg);
+	/* 4500ppm */
+	writel(0x19, dp->reg_base + ANALOIGX_DP_SSC_REG);
+	/*
+	 * To apply updated SSC parameters into SSC operation,
+	 * firmware must disable and enable this bit.
+	 */
+	reg = readl(dp->reg_base + ANALOGIX_DP_FUNC_EN_2);
+	reg |= SSC_FUNC_EN_N;
+	writel(reg, dp->reg_base + ANALOGIX_DP_FUNC_EN_2);
+	reg &= ~SSC_FUNC_EN_N;
+	writel(reg, dp->reg_base + ANALOGIX_DP_FUNC_EN_2);
+}
+
+static void analogix_dp_ssc_disable(struct analogix_dp_device *dp)
+{
+	u32 reg;
+
+	reg = readl(dp->reg_base + ANALOGIX_DP_FUNC_EN_2);
+	reg |= SSC_FUNC_EN_N;
+	writel(reg, dp->reg_base + ANALOGIX_DP_FUNC_EN_2);
+}
+
+bool analogix_dp_ssc_supported(struct analogix_dp_device *dp)
+{
+	/* Check if SSC is supported by both sides */
+	return dp->plat_data->ssc && dp->link_train.ssc;
+}
+
+void analogix_dp_set_link_bandwidth(struct analogix_dp_device *dp, u32 bwtype)
+{
+	u32 status;
+	int ret;
+
+	analogix_dp_write(dp, ANALOGIX_DP_LINK_BW_SET, bwtype);
+
+	if (dp->phy) {
+		union phy_configure_opts phy_cfg = {0};
+
+		phy_cfg.dp.lanes = dp->link_train.lane_count;
+		phy_cfg.dp.link_rate =
+			drm_dp_bw_code_to_link_rate(dp->link_train.link_rate) / 100;
+		phy_cfg.dp.ssc = analogix_dp_ssc_supported(dp);
+		phy_cfg.dp.set_lanes = false;
+		phy_cfg.dp.set_rate = true;
+		phy_cfg.dp.set_voltages = false;
+		ret = phy_configure(dp->phy, &phy_cfg);
+		if (ret && ret != -EOPNOTSUPP) {
+			dev_err(dp->dev, "%s: phy_configure failed: %d\n",
+				__func__, ret);
+			return;
+		}
+	} else {
+		if (analogix_dp_ssc_supported(dp))
+			analogix_dp_ssc_enable(dp);
+		else
+			analogix_dp_ssc_disable(dp);
+	}
+
+	ret = readx_poll_timeout(analogix_dp_get_pll_lock_status, dp, status,
+				 status != PLL_UNLOCKED, 120,
+				 120 * DP_TIMEOUT_LOOP_COUNT);
+	if (ret) {
+		dev_err(dp->dev, "Wait for pll lock failed %d\n", ret);
+		return;
+	}
 }
 
 void analogix_dp_get_link_bandwidth(struct analogix_dp_device *dp, u32 *bwtype)
@@ -519,9 +600,25 @@ void analogix_dp_get_link_bandwidth(struct analogix_dp_device *dp, u32 *bwtype)
 void analogix_dp_set_lane_count(struct analogix_dp_device *dp, u32 count)
 {
 	u32 reg;
+	int ret;
 
 	reg = count;
 	analogix_dp_write(dp, ANALOGIX_DP_LANE_COUNT_SET, reg);
+
+	if (dp->phy) {
+		union phy_configure_opts phy_cfg = {0};
+
+		phy_cfg.dp.lanes = dp->link_train.lane_count;
+		phy_cfg.dp.set_lanes = true;
+		phy_cfg.dp.set_rate = false;
+		phy_cfg.dp.set_voltages = false;
+		ret = phy_configure(dp->phy, &phy_cfg);
+		if (ret && ret != -EOPNOTSUPP) {
+			dev_err(dp->dev, "%s: phy_configure() failed: %d\n",
+				__func__, ret);
+			return;
+		}
+	}
 }
 
 void analogix_dp_get_lane_count(struct analogix_dp_device *dp, u32 *count)
@@ -530,6 +627,52 @@ void analogix_dp_get_lane_count(struct analogix_dp_device *dp, u32 *count)
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_LANE_COUNT_SET);
 	*count = reg;
+}
+
+void analogix_dp_set_lane_link_training(struct analogix_dp_device *dp)
+{
+	u8 lane;
+	int ret;
+
+	for (lane = 0; lane < dp->link_train.lane_count; lane++)
+		analogix_dp_write(dp,
+				  ANALOGIX_DP_LN0_LINK_TRAINING_CTL + 4 * lane,
+				  dp->link_train.training_lane[lane]);
+
+	if (dp->phy) {
+		union phy_configure_opts phy_cfg = {0};
+
+		for (lane = 0; lane < dp->link_train.lane_count; lane++) {
+			u8 training_lane = dp->link_train.training_lane[lane];
+			u8 vs, pe;
+
+			vs = (training_lane & DP_TRAIN_VOLTAGE_SWING_MASK) >>
+			     DP_TRAIN_VOLTAGE_SWING_SHIFT;
+			pe = (training_lane & DP_TRAIN_PRE_EMPHASIS_MASK) >>
+			     DP_TRAIN_PRE_EMPHASIS_SHIFT;
+			phy_cfg.dp.voltage[lane] = vs;
+			phy_cfg.dp.pre[lane] = pe;
+		}
+
+		phy_cfg.dp.lanes = dp->link_train.lane_count;
+		phy_cfg.dp.link_rate =
+			drm_dp_bw_code_to_link_rate(dp->link_train.link_rate) / 100;
+		phy_cfg.dp.set_lanes = false;
+		phy_cfg.dp.set_rate = false;
+		phy_cfg.dp.set_voltages = true;
+		ret = phy_configure(dp->phy, &phy_cfg);
+		if (ret && ret != -EOPNOTSUPP) {
+			dev_err(dp->dev, "%s: phy_configure() failed: %d\n",
+				__func__, ret);
+			return;
+		}
+	}
+}
+
+u32 analogix_dp_get_lane_link_training(struct analogix_dp_device *dp, u8 lane)
+{
+	return analogix_dp_read(dp,
+				ANALOGIX_DP_LN0_LINK_TRAINING_CTL + 4 * lane);
 }
 
 void analogix_dp_enable_enhanced_mode(struct analogix_dp_device *dp,
@@ -546,6 +689,15 @@ void analogix_dp_enable_enhanced_mode(struct analogix_dp_device *dp,
 		reg &= ~ENHANCED;
 		analogix_dp_write(dp, ANALOGIX_DP_SYS_CTL_4, reg);
 	}
+}
+
+bool analogix_dp_get_enhanced_mode(struct analogix_dp_device *dp)
+{
+	u32 reg;
+
+	reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_4);
+
+	return !!(reg & ENHANCED);
 }
 
 void analogix_dp_set_training_pattern(struct analogix_dp_device *dp,
@@ -583,242 +735,6 @@ void analogix_dp_set_training_pattern(struct analogix_dp_device *dp,
 	default:
 		break;
 	}
-}
-
-struct swing_pre_emp_ctrl {
-	u8 amp;
-	u8 emp;
-};
-
-static const struct swing_pre_emp_ctrl swing_pre_emp_ctrl_rbr[4][4] = {
-	/* voltage swing 0, pre-emphasis 0->3 */
-	{
-		{ .amp = 0x50, .emp = 0x00 },
-		{ .amp = 0x6c, .emp = 0x28 },
-		{ .amp = 0x80, .emp = 0x60 },
-		{ .amp = 0xb0, .emp = 0xc4 },
-	},
-	/* voltage swing 1, pre-emphasis 0->3 */
-	{
-		{ .amp = 0x78, .emp = 0x00 },
-		{ .amp = 0xa4, .emp = 0x50 },
-		{ .amp = 0xcc, .emp = 0xa6 },
-	},
-	/* voltage swing 2, pre-emphasis 0->3 */
-	{
-		{ .amp = 0xa0, .emp = 0x00 },
-		{ .amp = 0xe4, .emp = 0x72 },
-	},
-	/* voltage swing 3, pre-emphasis 0->3 */
-	{
-		{ .amp = 0xf0, .emp = 0x00 },
-	},
-};
-
-static const struct swing_pre_emp_ctrl swing_pre_emp_ctrl_hbr[4][4] = {
-	/* voltage swing 0, pre-emphasis 0->3 */
-	{
-		{ .amp = 0x50, .emp = 0x00 },
-		{ .amp = 0x6c, .emp = 0x34 },
-		{ .amp = 0x80, .emp = 0x64 },
-		{ .amp = 0xb8, .emp = 0xdc },
-	},
-	/* voltage swing 1, pre-emphasis 0->3 */
-	{
-		{ .amp = 0x78, .emp = 0x00 },
-		{ .amp = 0xa8, .emp = 0x58 },
-		{ .amp = 0xcc, .emp = 0xa8 },
-	},
-	/* voltage swing 2, pre-emphasis 0->3 */
-	{
-		{ .amp = 0xa0, .emp = 0x00 },
-		{ .amp = 0xdd, .emp = 0x74 },
-	},
-	/* voltage swing 3, pre-emphasis 0->3 */
-	{
-		{ .amp = 0xf0, .emp = 0x00 },
-	},
-};
-
-static const struct swing_pre_emp_ctrl swing_pre_emp_ctrl_hbr2[4][4] = {
-	/* voltage swing 0, pre-emphasis 0->3 */
-	{
-		{ .amp = 0x64, .emp = 0x1c },
-		{ .amp = 0x90, .emp = 0x78 },
-		{ .amp = 0xc4, .emp = 0xe0 },
-		{ .amp = 0xa0, .emp = 0xa0 },
-	},
-	/* voltage swing 1, pre-emphasis 0->3 */
-	{
-		{ .amp = 0x9c, .emp = 0x3c },
-		{ .amp = 0xe8, .emp = 0xd0 },
-		{ .amp = 0xb4, .emp = 0x78 },
-	},
-	/* voltage swing 2, pre-emphasis 0->3 */
-	{
-		{ .amp = 0xe0, .emp = 0x68 },
-		{ .amp = 0xe8, .emp = 0xd0 },
-	},
-	/* voltage swing 3, pre-emphasis 0->3 */
-	{
-		{ .amp = 0xf0, .emp = 0x00 },
-	},
-};
-
-void analogix_dp_set_lane0_link_training(struct analogix_dp_device *dp,
-					 u32 training_lane)
-{
-	const struct swing_pre_emp_ctrl *ctrl;
-	u8 voltage_swing = (training_lane & DP_TRAIN_VOLTAGE_SWING_MASK) >>
-			   DP_TRAIN_VOLTAGE_SWING_SHIFT;
-	u8 pre_emphasis = (training_lane & DP_TRAIN_PRE_EMPHASIS_MASK) >>
-			  DP_TRAIN_PRE_EMPHASIS_SHIFT;
-	u32 reg;
-
-	switch (dp->link_train.link_rate) {
-	case DP_LINK_BW_1_62:
-		ctrl = &swing_pre_emp_ctrl_rbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_2_7:
-		ctrl = &swing_pre_emp_ctrl_hbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_5_4:
-	default:
-		ctrl = &swing_pre_emp_ctrl_hbr2[voltage_swing][pre_emphasis];
-		break;
-	}
-
-	reg = training_lane;
-	analogix_dp_write(dp, ANALOGIX_DP_LN0_LINK_TRAINING_CTL, reg);
-
-	reg = analogix_dp_read(dp, ANALOGIX_DP_ANALOG_CTL_42);
-	reg |= R_FORCE_CH0_AMP | R_FORCE_CH0_EMP;
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_42, reg);
-
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_36, ctrl->amp);
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_37, ctrl->emp);
-}
-
-void analogix_dp_set_lane1_link_training(struct analogix_dp_device *dp,
-					 u32 training_lane)
-{
-	const struct swing_pre_emp_ctrl *ctrl;
-	u8 voltage_swing = (training_lane & DP_TRAIN_VOLTAGE_SWING_MASK) >>
-			   DP_TRAIN_VOLTAGE_SWING_SHIFT;
-	u8 pre_emphasis = (training_lane & DP_TRAIN_PRE_EMPHASIS_MASK) >>
-			  DP_TRAIN_PRE_EMPHASIS_SHIFT;
-	u32 reg;
-
-	switch (dp->link_train.link_rate) {
-	case DP_LINK_BW_1_62:
-		ctrl = &swing_pre_emp_ctrl_rbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_2_7:
-		ctrl = &swing_pre_emp_ctrl_hbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_5_4:
-	default:
-		ctrl = &swing_pre_emp_ctrl_hbr2[voltage_swing][pre_emphasis];
-		break;
-	}
-
-	reg = training_lane;
-	analogix_dp_write(dp, ANALOGIX_DP_LN1_LINK_TRAINING_CTL, reg);
-
-	reg = analogix_dp_read(dp, ANALOGIX_DP_ANALOG_CTL_42);
-	reg |= R_FORCE_CH1_AMP | R_FORCE_CH1_EMP;
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_42, reg);
-
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_39, ctrl->amp);
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_40, ctrl->emp);
-}
-
-void analogix_dp_set_lane2_link_training(struct analogix_dp_device *dp,
-					 u32 training_lane)
-{
-	const struct swing_pre_emp_ctrl *ctrl;
-	u8 voltage_swing = (training_lane & DP_TRAIN_VOLTAGE_SWING_MASK) >>
-			   DP_TRAIN_VOLTAGE_SWING_SHIFT;
-	u8 pre_emphasis = (training_lane & DP_TRAIN_PRE_EMPHASIS_MASK) >>
-			  DP_TRAIN_PRE_EMPHASIS_SHIFT;
-	u32 reg;
-
-	switch (dp->link_train.link_rate) {
-	case DP_LINK_BW_1_62:
-		ctrl = &swing_pre_emp_ctrl_rbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_2_7:
-		ctrl = &swing_pre_emp_ctrl_hbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_5_4:
-	default:
-		ctrl = &swing_pre_emp_ctrl_hbr2[voltage_swing][pre_emphasis];
-		break;
-	}
-
-	reg = training_lane;
-	analogix_dp_write(dp, ANALOGIX_DP_LN2_LINK_TRAINING_CTL, reg);
-
-	reg = analogix_dp_read(dp, ANALOGIX_DP_ANALOG_CTL_49);
-	reg |= R_FORCE_CH2_AMP | R_FORCE_CH2_EMP;
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_49, reg);
-
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_43, ctrl->amp);
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_44, ctrl->emp);
-}
-
-void analogix_dp_set_lane3_link_training(struct analogix_dp_device *dp,
-					 u32 training_lane)
-{
-	const struct swing_pre_emp_ctrl *ctrl;
-	u8 voltage_swing = (training_lane & DP_TRAIN_VOLTAGE_SWING_MASK) >>
-			   DP_TRAIN_VOLTAGE_SWING_SHIFT;
-	u8 pre_emphasis = (training_lane & DP_TRAIN_PRE_EMPHASIS_MASK) >>
-			  DP_TRAIN_PRE_EMPHASIS_SHIFT;
-	u32 reg;
-
-	switch (dp->link_train.link_rate) {
-	case DP_LINK_BW_1_62:
-		ctrl = &swing_pre_emp_ctrl_rbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_2_7:
-		ctrl = &swing_pre_emp_ctrl_hbr[voltage_swing][pre_emphasis];
-		break;
-	case DP_LINK_BW_5_4:
-	default:
-		ctrl = &swing_pre_emp_ctrl_hbr2[voltage_swing][pre_emphasis];
-		break;
-	}
-
-	reg = training_lane;
-	analogix_dp_write(dp, ANALOGIX_DP_LN3_LINK_TRAINING_CTL, reg);
-
-	reg = analogix_dp_read(dp, ANALOGIX_DP_ANALOG_CTL_49);
-	reg |= R_FORCE_CH3_AMP | R_FORCE_CH3_EMP;
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_49, reg);
-
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_46, ctrl->amp);
-	analogix_dp_write(dp, ANALOGIX_DP_ANALOG_CTL_47, ctrl->emp);
-}
-
-u32 analogix_dp_get_lane0_link_training(struct analogix_dp_device *dp)
-{
-	return analogix_dp_read(dp, ANALOGIX_DP_LN0_LINK_TRAINING_CTL);
-}
-
-u32 analogix_dp_get_lane1_link_training(struct analogix_dp_device *dp)
-{
-	return analogix_dp_read(dp, ANALOGIX_DP_LN1_LINK_TRAINING_CTL);
-}
-
-u32 analogix_dp_get_lane2_link_training(struct analogix_dp_device *dp)
-{
-	return analogix_dp_read(dp, ANALOGIX_DP_LN2_LINK_TRAINING_CTL);
-}
-
-u32 analogix_dp_get_lane3_link_training(struct analogix_dp_device *dp)
-{
-	return analogix_dp_read(dp, ANALOGIX_DP_LN3_LINK_TRAINING_CTL);
 }
 
 void analogix_dp_reset_macro(struct analogix_dp_device *dp)
@@ -1000,8 +916,12 @@ void analogix_dp_config_video_slave_mode(struct analogix_dp_device *dp)
 	u32 reg;
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_1);
-	reg &= ~(MASTER_VID_FUNC_EN_N | SLAVE_VID_FUNC_EN_N);
-	reg |= MASTER_VID_FUNC_EN_N;
+	if (dp->plat_data && is_rockchip(dp->plat_data->dev_type)) {
+		reg &= ~(RK_VID_CAP_FUNC_EN_N | RK_VID_FIFO_FUNC_EN_N);
+	} else {
+		reg &= ~(MASTER_VID_FUNC_EN_N | SLAVE_VID_FUNC_EN_N);
+		reg |= MASTER_VID_FUNC_EN_N;
+	}
 	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_1, reg);
 
 	reg = analogix_dp_read(dp, ANALOGIX_DP_VIDEO_CTL_10);
@@ -1039,6 +959,286 @@ void analogix_dp_disable_scrambling(struct analogix_dp_device *dp)
 	reg = analogix_dp_read(dp, ANALOGIX_DP_TRAINING_PTN_SET);
 	reg |= SCRAMBLING_DISABLE;
 	analogix_dp_write(dp, ANALOGIX_DP_TRAINING_PTN_SET, reg);
+}
+
+void analogix_dp_enable_psr_crc(struct analogix_dp_device *dp)
+{
+	analogix_dp_write(dp, ANALOGIX_DP_CRC_CON, PSR_VID_CRC_ENABLE);
+}
+
+static ssize_t analogix_dp_get_psr_status(struct analogix_dp_device *dp)
+{
+	ssize_t val;
+	u8 status;
+
+	val = drm_dp_dpcd_readb(&dp->aux, DP_PSR_STATUS, &status);
+	if (val < 0) {
+		dev_err(dp->dev, "PSR_STATUS read failed ret=%zd", val);
+		return val;
+	}
+	return status;
+}
+
+static void analogix_dp_reuse_spd(struct analogix_dp_device *dp)
+{
+	u32 reg, val;
+
+	switch (dp->plat_data->dev_type) {
+	case RK3588_EDP:
+		reg = ANALOGIX_DP_SPDIF_AUDIO_CTL_0;
+		break;
+	default:
+		reg = ANALOGIX_DP_VIDEO_CTL_3;
+		break;
+	}
+
+	val = analogix_dp_read(dp, reg);
+	val |= REUSE_SPD_EN;
+	analogix_dp_write(dp, reg, val);
+}
+
+int analogix_dp_send_psr_spd(struct analogix_dp_device *dp,
+			     struct dp_sdp *vsc, bool blocking)
+{
+	unsigned int val;
+	int ret;
+	ssize_t psr_status;
+
+	/* don't send info frame */
+	val = analogix_dp_read(dp, ANALOGIX_DP_PKT_SEND_CTL);
+	val &= ~IF_EN;
+	analogix_dp_write(dp, ANALOGIX_DP_PKT_SEND_CTL, val);
+
+	/* configure single frame update mode */
+	analogix_dp_write(dp, ANALOGIX_DP_PSR_FRAME_UPDATE_CTRL,
+			  PSR_FRAME_UP_TYPE_BURST | PSR_CRC_SEL_HARDWARE);
+
+	/* configure VSC HB0~HB3 */
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_HB0, vsc->sdp_header.HB0);
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_HB1, vsc->sdp_header.HB1);
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_HB2, vsc->sdp_header.HB2);
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_HB3, vsc->sdp_header.HB3);
+
+	/* configure reused VSC PB0~PB3, magic number from vendor */
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_PB0, 0x00);
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_PB1, 0x16);
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_PB2, 0xCE);
+	analogix_dp_write(dp, ANALOGIX_DP_SPD_PB3, 0x5D);
+
+	/* configure DB0 / DB1 values */
+	analogix_dp_write(dp, ANALOGIX_DP_VSC_SHADOW_DB0, vsc->db[0]);
+	analogix_dp_write(dp, ANALOGIX_DP_VSC_SHADOW_DB1, vsc->db[1]);
+
+	/* configure PB0 / PB1 values */
+	analogix_dp_write(dp, ANALOGIX_DP_VSC_SHADOW_PB0,
+			  vsc->db[1] ? 0x8d : 0x00);
+	analogix_dp_write(dp, ANALOGIX_DP_VSC_SHADOW_PB1, 0x00);
+
+	/* set reuse spd inforframe */
+	analogix_dp_reuse_spd(dp);
+
+	/* mark info frame update */
+	val = analogix_dp_read(dp, ANALOGIX_DP_PKT_SEND_CTL);
+	val = (val | IF_UP) & ~IF_EN;
+	analogix_dp_write(dp, ANALOGIX_DP_PKT_SEND_CTL, val);
+
+	/* send info frame */
+	val = analogix_dp_read(dp, ANALOGIX_DP_PKT_SEND_CTL);
+	val |= IF_EN;
+	analogix_dp_write(dp, ANALOGIX_DP_PKT_SEND_CTL, val);
+
+	if (!blocking)
+		return 0;
+
+	/*
+	 * db[1]!=0: entering PSR, wait for fully active remote frame buffer.
+	 * db[1]==0: exiting PSR, wait for either
+	 *  (a) ACTIVE_RESYNC - the sink "must display the
+	 *      incoming active frames from the Source device with no visible
+	 *      glitches and/or artifacts", even though timings may still be
+	 *      re-synchronizing; or
+	 *  (b) INACTIVE - the transition is fully complete.
+	 */
+	ret = readx_poll_timeout(analogix_dp_get_psr_status, dp, psr_status,
+		psr_status >= 0 &&
+		((vsc->db[1] && psr_status == DP_PSR_SINK_ACTIVE_RFB) ||
+		(!vsc->db[1] && (psr_status == DP_PSR_SINK_ACTIVE_RESYNC ||
+				 psr_status == DP_PSR_SINK_INACTIVE))),
+		1500, DP_TIMEOUT_PSR_LOOP_MS * 1000);
+	if (ret) {
+		dev_warn(dp->dev, "Failed to apply PSR %d\n", ret);
+		return ret;
+	}
+	return 0;
+}
+
+int analogix_dp_phy_power_on(struct analogix_dp_device *dp)
+{
+	int ret;
+
+	ret = phy_set_mode(dp->phy, PHY_MODE_DP);
+	if (ret) {
+		dev_err(dp->dev, "phy_set_mode failed: %d\n", ret);
+		return ret;
+	}
+
+	ret = phy_power_on(dp->phy);
+	if (ret) {
+		dev_err(dp->dev, "phy_power_on failed: %d\n", ret);
+		return ret;
+	}
+
+	return ret;
+}
+
+void analogix_dp_phy_power_off(struct analogix_dp_device *dp)
+{
+	phy_power_off(dp->phy);
+}
+
+enum {
+	AUX_STATUS_OK,
+	AUX_STATUS_NACK_ERROR,
+	AUX_STATUS_TIMEOUT_ERROR,
+	AUX_STATUS_UNKNOWN_ERROR,
+	AUX_STATUS_MUCH_DEFER_ERROR,
+	AUX_STATUS_TX_SHORT_ERROR,
+	AUX_STATUS_RX_SHORT_ERROR,
+	AUX_STATUS_NACK_WITHOUT_M_ERROR,
+	AUX_STATUS_I2C_NACK_ERROR
+};
+
+ssize_t analogix_dp_transfer(struct analogix_dp_device *dp,
+			     struct drm_dp_aux_msg *msg)
+{
+	u32 reg;
+	u8 *buffer = msg->buffer;
+	unsigned int i;
+	int num_transferred = 0;
+	int ret;
+
+	/* Buffer size of AUX CH is 16 bytes */
+	if (WARN_ON(msg->size > 16))
+		return -E2BIG;
+
+	/* Clear AUX CH data buffer */
+	reg = BUF_CLR;
+	analogix_dp_write(dp, ANALOGIX_DP_BUFFER_DATA_CTL, reg);
+
+	switch (msg->request & ~DP_AUX_I2C_MOT) {
+	case DP_AUX_I2C_WRITE:
+		reg = AUX_TX_COMM_WRITE | AUX_TX_COMM_I2C_TRANSACTION;
+		if (msg->request & DP_AUX_I2C_MOT)
+			reg |= AUX_TX_COMM_MOT;
+		break;
+
+	case DP_AUX_I2C_READ:
+		reg = AUX_TX_COMM_READ | AUX_TX_COMM_I2C_TRANSACTION;
+		if (msg->request & DP_AUX_I2C_MOT)
+			reg |= AUX_TX_COMM_MOT;
+		break;
+
+	case DP_AUX_NATIVE_WRITE:
+		reg = AUX_TX_COMM_WRITE | AUX_TX_COMM_DP_TRANSACTION;
+		break;
+
+	case DP_AUX_NATIVE_READ:
+		reg = AUX_TX_COMM_READ | AUX_TX_COMM_DP_TRANSACTION;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+
+	reg |= AUX_LENGTH(msg->size);
+	analogix_dp_write(dp, ANALOGIX_DP_AUX_CH_CTL_1, reg);
+
+	/* Select DPCD device address */
+	reg = AUX_ADDR_7_0(msg->address);
+	analogix_dp_write(dp, ANALOGIX_DP_AUX_ADDR_7_0, reg);
+	reg = AUX_ADDR_15_8(msg->address);
+	analogix_dp_write(dp, ANALOGIX_DP_AUX_ADDR_15_8, reg);
+	reg = AUX_ADDR_19_16(msg->address);
+	analogix_dp_write(dp, ANALOGIX_DP_AUX_ADDR_19_16, reg);
+
+	if (!(msg->request & DP_AUX_I2C_READ)) {
+		for (i = 0; i < msg->size; i++) {
+			reg = buffer[i];
+			analogix_dp_write(dp, ANALOGIX_DP_BUF_DATA_0 + 4 * i,
+					  reg);
+			num_transferred++;
+		}
+	}
+
+	/* Enable AUX CH operation */
+	reg = AUX_EN;
+
+	/* Zero-sized messages specify address-only transactions. */
+	if (msg->size < 1)
+		reg |= ADDR_ONLY;
+
+	analogix_dp_write(dp, ANALOGIX_DP_AUX_CH_CTL_2, reg);
+
+	ret = readx_poll_timeout(readl, dp->reg_base + ANALOGIX_DP_AUX_CH_CTL_2,
+				 reg, !(reg & AUX_EN), 25, 500 * 1000);
+	if (ret) {
+		dev_err(dp->dev, "AUX CH enable timeout!\n");
+		goto aux_error;
+	}
+
+	/* TODO: Wait for an interrupt instead of looping? */
+	/* Is AUX CH command reply received? */
+	ret = readx_poll_timeout(readl, dp->reg_base + ANALOGIX_DP_INT_STA,
+				 reg, reg & RPLY_RECEIV, 10, 20 * 1000);
+	if (ret) {
+		dev_err(dp->dev, "AUX CH cmd reply timeout!\n");
+		goto aux_error;
+	}
+
+	/* Clear interrupt source for AUX CH command reply */
+	analogix_dp_write(dp, ANALOGIX_DP_INT_STA, RPLY_RECEIV);
+
+	reg = analogix_dp_read(dp, ANALOGIX_DP_AUX_CH_STA);
+	if ((reg & AUX_STATUS_MASK) == AUX_STATUS_TIMEOUT_ERROR)
+		return -ETIMEDOUT;
+
+	if (msg->request & DP_AUX_I2C_READ) {
+		size_t buf_data_count;
+
+		reg = analogix_dp_read(dp, ANALOGIX_DP_BUFFER_DATA_CTL);
+		buf_data_count = BUF_DATA_COUNT(reg);
+
+		if (buf_data_count != msg->size)
+			return -EBUSY;
+
+		for (i = 0; i < msg->size; i++) {
+			reg = analogix_dp_read(dp, ANALOGIX_DP_BUF_DATA_0 +
+					       4 * i);
+			buffer[i] = (unsigned char)reg;
+			num_transferred++;
+		}
+	}
+
+	/* Check if Rx sends defer */
+	reg = analogix_dp_read(dp, ANALOGIX_DP_AUX_RX_COMM);
+	if (reg == AUX_RX_COMM_AUX_DEFER)
+		msg->reply = DP_AUX_NATIVE_REPLY_DEFER;
+	else if (reg == AUX_RX_COMM_I2C_DEFER)
+		msg->reply = DP_AUX_I2C_REPLY_DEFER;
+	else if ((msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_WRITE ||
+		 (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_READ)
+		msg->reply = DP_AUX_I2C_REPLY_ACK;
+	else if ((msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_NATIVE_WRITE ||
+		 (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_NATIVE_READ)
+		msg->reply = DP_AUX_NATIVE_REPLY_ACK;
+
+	return (num_transferred == msg->size) ? num_transferred : -EBUSY;
+
+aux_error:
+	/* if aux err happen, reset aux */
+	analogix_dp_init_aux(dp);
+
+	return -EREMOTEIO;
 }
 
 void analogix_dp_set_video_format(struct analogix_dp_device *dp)
@@ -1107,154 +1307,60 @@ void analogix_dp_video_bist_enable(struct analogix_dp_device *dp)
 	analogix_dp_write(dp, ANALOGIX_DP_VIDEO_CTL_10, reg);
 }
 
-ssize_t analogix_dp_transfer(struct analogix_dp_device *dp,
-			     struct drm_dp_aux_msg *msg)
+void analogix_dp_audio_config_i2s(struct analogix_dp_device *dp)
 {
 	u32 reg;
-	u8 *buffer = msg->buffer;
-	int timeout_loop = 0;
-	unsigned int i;
-	int num_transferred = 0;
 
-	/* Buffer size of AUX CH is 16 bytes */
-	if (WARN_ON(msg->size > 16))
-		return -E2BIG;
+	reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_4);
+	reg &= ~FIX_M_AUD;
+	analogix_dp_write(dp, ANALOGIX_DP_SYS_CTL_4, reg);
 
-	/* Clear AUX CH data buffer */
-	reg = BUF_CLR;
-	analogix_dp_write(dp, ANALOGIX_DP_BUFFER_DATA_CTL, reg);
-
-	switch (msg->request & ~DP_AUX_I2C_MOT) {
-	case DP_AUX_I2C_WRITE:
-		reg = AUX_TX_COMM_WRITE | AUX_TX_COMM_I2C_TRANSACTION;
-		if (msg->request & DP_AUX_I2C_MOT)
-			reg |= AUX_TX_COMM_MOT;
-		break;
-
-	case DP_AUX_I2C_READ:
-		reg = AUX_TX_COMM_READ | AUX_TX_COMM_I2C_TRANSACTION;
-		if (msg->request & DP_AUX_I2C_MOT)
-			reg |= AUX_TX_COMM_MOT;
-		break;
-
-	case DP_AUX_NATIVE_WRITE:
-		reg = AUX_TX_COMM_WRITE | AUX_TX_COMM_DP_TRANSACTION;
-		break;
-
-	case DP_AUX_NATIVE_READ:
-		reg = AUX_TX_COMM_READ | AUX_TX_COMM_DP_TRANSACTION;
-		break;
-
-	default:
-		return -EINVAL;
-	}
-
-	reg |= AUX_LENGTH(msg->size);
-	analogix_dp_write(dp, ANALOGIX_DP_AUX_CH_CTL_1, reg);
-
-	/* Select DPCD device address */
-	reg = AUX_ADDR_7_0(msg->address);
-	analogix_dp_write(dp, ANALOGIX_DP_AUX_ADDR_7_0, reg);
-	reg = AUX_ADDR_15_8(msg->address);
-	analogix_dp_write(dp, ANALOGIX_DP_AUX_ADDR_15_8, reg);
-	reg = AUX_ADDR_19_16(msg->address);
-	analogix_dp_write(dp, ANALOGIX_DP_AUX_ADDR_19_16, reg);
-
-	if (!(msg->request & DP_AUX_I2C_READ)) {
-		for (i = 0; i < msg->size; i++) {
-			reg = buffer[i];
-			analogix_dp_write(dp, ANALOGIX_DP_BUF_DATA_0 + 4 * i,
-					  reg);
-			num_transferred++;
-		}
-	}
-
-	/* Enable AUX CH operation */
-	reg = AUX_EN;
-
-	/* Zero-sized messages specify address-only transactions. */
-	if (msg->size < 1)
-		reg |= ADDR_ONLY;
-
-	analogix_dp_write(dp, ANALOGIX_DP_AUX_CH_CTL_2, reg);
-
-	/* Is AUX CH command reply received? */
-	/* TODO: Wait for an interrupt instead of looping? */
-	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA);
-	while (!(reg & RPLY_RECEIV)) {
-		timeout_loop++;
-		if (timeout_loop > DP_TIMEOUT_LOOP_COUNT) {
-			dev_err(dp->dev, "AUX CH command reply failed!\n");
-			return -ETIMEDOUT;
-		}
-		reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA);
-		usleep_range(10, 11);
-	}
-
-	/* Clear interrupt source for AUX CH command reply */
-	analogix_dp_write(dp, ANALOGIX_DP_INT_STA, RPLY_RECEIV);
-
-	/* Clear interrupt source for AUX CH access error */
-	reg = analogix_dp_read(dp, ANALOGIX_DP_INT_STA);
-	if (reg & AUX_ERR) {
-		analogix_dp_write(dp, ANALOGIX_DP_INT_STA, AUX_ERR);
-		return -EREMOTEIO;
-	}
-
-	/* Check AUX CH error access status */
-	reg = analogix_dp_read(dp, ANALOGIX_DP_AUX_CH_STA);
-	if ((reg & AUX_STATUS_MASK)) {
-		dev_err(dp->dev, "AUX CH error happened: %d\n\n",
-			reg & AUX_STATUS_MASK);
-		return -EREMOTEIO;
-	}
-
-	if (msg->request & DP_AUX_I2C_READ) {
-		for (i = 0; i < msg->size; i++) {
-			reg = analogix_dp_read(dp,
-					       ANALOGIX_DP_BUF_DATA_0 + 4 * i);
-			buffer[i] = (unsigned char)reg;
-			num_transferred++;
-		}
-	}
-
-	/* Check if Rx sends defer */
-	reg = analogix_dp_read(dp, ANALOGIX_DP_AUX_RX_COMM);
-	if (reg == AUX_RX_COMM_AUX_DEFER)
-		msg->reply = DP_AUX_NATIVE_REPLY_DEFER;
-	else if (reg == AUX_RX_COMM_I2C_DEFER)
-		msg->reply = DP_AUX_I2C_REPLY_DEFER;
-	else if ((msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_WRITE ||
-		 (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_I2C_READ)
-		msg->reply = DP_AUX_I2C_REPLY_ACK;
-	else if ((msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_NATIVE_WRITE ||
-		 (msg->request & ~DP_AUX_I2C_MOT) == DP_AUX_NATIVE_READ)
-		msg->reply = DP_AUX_NATIVE_REPLY_ACK;
-
-	return num_transferred;
+	reg = analogix_dp_read(dp, ANALOGIX_DP_I2S_CTRL);
+	reg |= I2S_EN;
+	analogix_dp_write(dp, ANALOGIX_DP_I2S_CTRL, reg);
 }
 
-void analogix_dp_ssc_enable(struct analogix_dp_device *dp)
+void analogix_dp_audio_config_spdif(struct analogix_dp_device *dp)
 {
-	u8 reg;
+	u32 reg;
 
-	analogix_dp_write(dp, ANALOGIX_DP_SSC_REG, 0x17);
-	/*
-	 * To apply updated SSC parameters into SSC operation,
-	 * firmware must disable and enable this bit.
-	 */
-	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_2);
-	reg |= SSC_FUNC_EN_N;
-	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_2, reg);
-	reg &= ~SSC_FUNC_EN_N;
-	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_2, reg);
+	reg = analogix_dp_read(dp, ANALOGIX_DP_SYS_CTL_4);
+	reg &= ~FIX_M_AUD;
+	analogix_dp_write(dp, ANALOGIX_DP_SYS_CTL_4, reg);
+
+	reg = analogix_dp_read(dp, ANALOGIX_DP_SPDIF_AUDIO_CTL_0);
+	reg |= AUD_SPDIF_EN;
+	analogix_dp_write(dp, ANALOGIX_DP_SPDIF_AUDIO_CTL_0, reg);
 }
 
-void analogix_dp_ssc_disable(struct analogix_dp_device *dp)
+void analogix_dp_audio_enable(struct analogix_dp_device *dp)
 {
-	u8 reg;
+	u32 reg;
 
-	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_2);
-	reg |= SSC_FUNC_EN_N;
-	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_2, reg);
+	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_1);
+	reg &= ~(AUD_FIFO_FUNC_EN_N | AUD_FUNC_EN_N);
+	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_1, reg);
+
+	reg = analogix_dp_read(dp, ANALOGIX_DP_AUD_CTL);
+	reg |= MISC_CTRL_RESET | DP_AUDIO_EN;
+	analogix_dp_write(dp, ANALOGIX_DP_AUD_CTL, reg);
+}
+
+void analogix_dp_audio_disable(struct analogix_dp_device *dp)
+{
+	u32 reg;
+
+	analogix_dp_write(dp, ANALOGIX_DP_AUD_CTL, 0);
+
+	reg = analogix_dp_read(dp, ANALOGIX_DP_FUNC_EN_1);
+	reg |= AUD_FIFO_FUNC_EN_N | AUD_FUNC_EN_N;
+	analogix_dp_write(dp, ANALOGIX_DP_FUNC_EN_1, reg);
+}
+
+void analogix_dp_init(struct analogix_dp_device *dp)
+{
+	analogix_dp_init_interrupt(dp);
+	analogix_dp_config_interrupt(dp);
+	analogix_dp_init_hpd(dp);
+	analogix_dp_init_aux(dp);
 }

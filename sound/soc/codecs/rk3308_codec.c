@@ -44,7 +44,6 @@
 #include <sound/tlv.h>
 
 #include "rk3308_codec.h"
-#include "rk3308_codec_provider.h"
 
 #if defined(CONFIG_DEBUG_FS)
 #include <linux/fs.h>
@@ -157,7 +156,7 @@ struct rk3308_codec_priv {
 	struct gpio_desc *hp_ctl_gpio;
 	struct gpio_desc *spk_ctl_gpio;
 	struct gpio_desc *pa_drv_gpio;
-	struct snd_soc_codec *codec;
+	struct snd_soc_component *component;
 	struct snd_soc_jack *hpdet_jack;
 	struct regulator *vcc_micbias;
 	u32 codec_ver;
@@ -623,8 +622,8 @@ static const struct snd_kcontrol_new rk3308_codec_dapm_controls[] = {
 static int rk3308_codec_mic_mute_get(struct snd_kcontrol *kcontrol,
 				     struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	unsigned int value;
 	int grp = e->reg;
@@ -655,8 +654,8 @@ static int rk3308_codec_mic_mute_get(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_mic_mute_put(struct snd_kcontrol *kcontrol,
 				     struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	unsigned int value;
 	int grp = e->reg;
@@ -689,8 +688,8 @@ static int rk3308_codec_mic_mute_put(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_micbias_volts_get(struct snd_kcontrol *kcontrol,
 					  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	ucontrol->value.integer.value[0] = rk3308->micbias_volt;
 
@@ -700,8 +699,8 @@ static int rk3308_codec_micbias_volts_get(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_micbias_volts_put(struct snd_kcontrol *kcontrol,
 					  struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	unsigned int volt = ucontrol->value.integer.value[0];
 	int ret;
 
@@ -724,8 +723,8 @@ static int rk3308_codec_micbias_volts_put(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_main_micbias_get(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	ucontrol->value.integer.value[0] = rk3308->enable_micbias;
 
@@ -735,8 +734,8 @@ static int rk3308_codec_main_micbias_get(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_main_micbias_put(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	unsigned int on = ucontrol->value.integer.value[0];
 
 	if (on) {
@@ -759,8 +758,8 @@ static int rk3308_codec_mic_gain_get(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_mic_gain_put(struct snd_kcontrol *kcontrol,
 				     struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	unsigned int gain = ucontrol->value.integer.value[0];
 
 	if (gain > RK3308_ADC_CH1_MIC_GAIN_MAX) {
@@ -788,8 +787,8 @@ static int rk3308_codec_mic_gain_put(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_hpf_get(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	unsigned int value;
 
@@ -813,8 +812,8 @@ static int rk3308_codec_hpf_get(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_hpf_put(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	struct soc_enum *e = (struct soc_enum *)kcontrol->private_value;
 	unsigned int value = ucontrol->value.integer.value[0];
 
@@ -850,8 +849,8 @@ static int rk3308_codec_hpout_l_get_tlv(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_hpout_l_put_tlv(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	unsigned int dgain = ucontrol->value.integer.value[0];
 
 	if (dgain > RK3308_DAC_L_HPOUT_GAIN_MAX) {
@@ -874,8 +873,8 @@ static int rk3308_codec_hpout_r_get_tlv(struct snd_kcontrol *kcontrol,
 static int rk3308_codec_hpout_r_put_tlv(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	unsigned int dgain = ucontrol->value.integer.value[0];
 
 	if (dgain > RK3308_DAC_R_HPOUT_GAIN_MAX) {
@@ -999,9 +998,9 @@ static void rk3308_speaker_ctl(struct rk3308_codec_priv *rk3308, int on)
 	}
 }
 
-static int rk3308_codec_reset(struct snd_soc_codec *codec)
+static int rk3308_codec_reset(struct snd_soc_component *component)
 {
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	reset_control_assert(rk3308->reset);
 	usleep_range(10000, 11000);     /* estimated value */
@@ -1043,10 +1042,10 @@ static int rk3308_codec_dac_dig_reset(struct rk3308_codec_priv *rk3308)
 	return 0;
 }
 
-static int rk3308_set_bias_level(struct snd_soc_codec *codec,
+static int rk3308_set_bias_level(struct snd_soc_component *component,
 				 enum snd_soc_bias_level level)
 {
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	switch (level) {
 	case SND_SOC_BIAS_ON:
@@ -1067,8 +1066,8 @@ static int rk3308_set_bias_level(struct snd_soc_codec *codec,
 static int rk3308_set_dai_fmt(struct snd_soc_dai *codec_dai,
 			      unsigned int fmt)
 {
-	struct snd_soc_codec *codec = codec_dai->codec;
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = codec_dai->component;
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	unsigned int adc_aif1 = 0, adc_aif2 = 0, dac_aif1 = 0, dac_aif2 = 0;
 	int idx, grp, is_master;
 	int type = ADC_TYPE_ALL;
@@ -1330,8 +1329,8 @@ static int rk3308_codec_update_adc_grps(struct rk3308_codec_priv *rk3308,
 
 static int rk3308_mute_stream(struct snd_soc_dai *dai, int mute, int stream)
 {
-	struct snd_soc_codec *codec = dai->codec;
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = dai->component;
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	if (stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		int dgain;
@@ -3252,8 +3251,8 @@ static int rk3308_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_pcm_hw_params *params,
 			    struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = dai->component;
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	struct snd_pcm_str *playback_str =
 			&substream->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK];
 	int type = ADC_TYPE_LOOPBACK;
@@ -3327,8 +3326,8 @@ static int rk3308_hw_params(struct snd_pcm_substream *substream,
 static int rk3308_pcm_trigger(struct snd_pcm_substream *substream,
 			      int cmd, struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = dai->component;
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	int type = ADC_TYPE_LOOPBACK;
 	int idx, grp;
 
@@ -3371,8 +3370,8 @@ static int rk3308_pcm_trigger(struct snd_pcm_substream *substream,
 static void rk3308_pcm_shutdown(struct snd_pcm_substream *substream,
 				struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_component *component = dai->component;
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		rk3308_codec_close_playback(rk3308);
@@ -3431,9 +3430,9 @@ static struct snd_soc_dai_driver rk3308_dai[] = {
 	},
 };
 
-static int rk3308_suspend(struct snd_soc_codec *codec)
+static int rk3308_suspend(struct snd_soc_component *component)
 {
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	if (rk3308->no_deep_low_power)
 		goto out;
@@ -3444,13 +3443,13 @@ static int rk3308_suspend(struct snd_soc_codec *codec)
 	clk_disable_unprepare(rk3308->pclk);
 
 out:
-	rk3308_set_bias_level(codec, SND_SOC_BIAS_OFF);
+	rk3308_set_bias_level(component, SND_SOC_BIAS_OFF);
 	return 0;
 }
 
-static int rk3308_resume(struct snd_soc_codec *codec)
+static int rk3308_resume(struct snd_soc_component *component)
 {
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	int ret = 0;
 
 	if (rk3308->no_deep_low_power)
@@ -3479,7 +3478,7 @@ static int rk3308_resume(struct snd_soc_codec *codec)
 
 	rk3308_codec_dlp_up(rk3308);
 out:
-	rk3308_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
+	rk3308_set_bias_level(component, SND_SOC_BIAS_STANDBY);
 	return ret;
 }
 
@@ -3612,9 +3611,9 @@ static int rk3308_codec_dapm_mic_gains(struct rk3308_codec_priv *rk3308)
 	int ret;
 
 	if (rk3308->codec_ver >= ACODEC_VERSION_B) {
-		ret = snd_soc_add_codec_controls(rk3308->codec,
-						 mic_gains_b,
-						 ARRAY_SIZE(mic_gains_b));
+		ret = snd_soc_add_component_controls(rk3308->component,
+						     mic_gains_b,
+						     ARRAY_SIZE(mic_gains_b));
 		if (ret) {
 			dev_err(rk3308->plat_dev,
 				"%s: add mic_gains_b failed: %d\n",
@@ -3622,9 +3621,9 @@ static int rk3308_codec_dapm_mic_gains(struct rk3308_codec_priv *rk3308)
 			return ret;
 		}
 	} else {
-		ret = snd_soc_add_codec_controls(rk3308->codec,
-						 mic_gains_a,
-						 ARRAY_SIZE(mic_gains_a));
+		ret = snd_soc_add_component_controls(rk3308->component,
+						     mic_gains_a,
+						     ARRAY_SIZE(mic_gains_a));
 		if (ret) {
 			dev_err(rk3308->plat_dev,
 				"%s: add mic_gains_a failed: %d\n",
@@ -3716,15 +3715,15 @@ static int rk3308_codec_prepare(struct rk3308_codec_priv *rk3308)
 	return 0;
 }
 
-static int rk3308_probe(struct snd_soc_codec *codec)
+static int rk3308_probe(struct snd_soc_component *component)
 {
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 	int ext_micbias;
 
-	rk3308->codec = codec;
+	rk3308->component = component;
 	rk3308_codec_set_dac_path_state(rk3308, PATH_IDLE);
 
-	rk3308_codec_reset(codec);
+	rk3308_codec_reset(component);
 	rk3308_codec_power_on(rk3308);
 
 	/* From vendor recommend, disable micbias at first. */
@@ -3743,9 +3742,9 @@ static int rk3308_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static int rk3308_remove(struct snd_soc_codec *codec)
+static void rk3308_remove(struct snd_soc_component *component)
 {
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
 
 	rk3308_headphone_ctl(rk3308, 0);
 	rk3308_speaker_ctl(rk3308, 0);
@@ -3758,11 +3757,27 @@ static int rk3308_remove(struct snd_soc_codec *codec)
 
 	regcache_cache_only(rk3308->regmap, false);
 	regcache_sync(rk3308->regmap);
+}
+
+static int rk3308_codec_set_jack(struct snd_soc_component *component,
+				 struct snd_soc_jack *jack, void *data)
+{
+	struct rk3308_codec_priv *rk3308 = snd_soc_component_get_drvdata(component);
+
+	rk3308->hpdet_jack = jack;
+
+	/* To detect jack once during startup */
+	disable_irq_nosync(rk3308->irq);
+	queue_delayed_work(system_power_efficient_wq,
+			   &rk3308->hpdet_work, msecs_to_jiffies(10));
+
+	dev_info(rk3308->plat_dev, "%s: Request detect hp jack once\n",
+		 __func__);
 
 	return 0;
 }
 
-static struct snd_soc_codec_driver soc_codec_dev_rk3308 = {
+static const struct snd_soc_component_driver soc_codec_dev_rk3308 = {
 	.probe = rk3308_probe,
 	.remove = rk3308_remove,
 	.suspend = rk3308_suspend,
@@ -3770,6 +3785,7 @@ static struct snd_soc_codec_driver soc_codec_dev_rk3308 = {
 	.set_bias_level = rk3308_set_bias_level,
 	.controls = rk3308_codec_dapm_controls,
 	.num_controls = ARRAY_SIZE(rk3308_codec_dapm_controls),
+	.set_jack = rk3308_codec_set_jack,
 };
 
 static const struct reg_default rk3308_codec_reg_defaults[] = {
@@ -3935,26 +3951,6 @@ static irqreturn_t rk3308_codec_hpdet_isr(int irq, void *data)
 			   &rk3308->hpdet_work, msecs_to_jiffies(10));
 
 	return IRQ_HANDLED;
-}
-
-void (*rk3308_codec_set_jack_detect_cb)(struct snd_soc_codec *codec,
-					struct snd_soc_jack *hpdet_jack);
-EXPORT_SYMBOL_GPL(rk3308_codec_set_jack_detect_cb);
-
-static void rk3308_codec_set_jack_detect(struct snd_soc_codec *codec,
-				  struct snd_soc_jack *hpdet_jack)
-{
-	struct rk3308_codec_priv *rk3308 = snd_soc_codec_get_drvdata(codec);
-
-	rk3308->hpdet_jack = hpdet_jack;
-
-	/* To detect jack once during startup */
-	disable_irq_nosync(rk3308->irq);
-	queue_delayed_work(system_power_efficient_wq,
-			   &rk3308->hpdet_work, msecs_to_jiffies(10));
-
-	dev_info(rk3308->plat_dev, "%s: Request detect hp jack once\n",
-		 __func__);
 }
 
 static const struct regmap_config rk3308_codec_regmap_config = {
@@ -4525,6 +4521,10 @@ static int rk3308_platform_probe(struct platform_device *pdev)
 		return PTR_ERR(rk3308->grf);
 	}
 
+	ret = rk3308_codec_get_version(rk3308);
+	if (ret < 0)
+		return dev_err_probe(&pdev->dev, ret, "Failed to get acodec version\n");
+
 	ret = rk3308_codec_sysfs_init(pdev, rk3308);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Sysfs init failed\n");
@@ -4688,13 +4688,6 @@ static int rk3308_platform_probe(struct platform_device *pdev)
 		goto failed;
 	}
 
-	ret = rk3308_codec_get_version(rk3308);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Failed to get acodec version: %d\n",
-			ret);
-		goto failed;
-	}
-
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(base)) {
@@ -4754,8 +4747,6 @@ static int rk3308_platform_probe(struct platform_device *pdev)
 				     (HPDET_BOTH_NEG_POS << 16) |
 				      HPDET_BOTH_NEG_POS);
 		}
-
-		rk3308_codec_set_jack_detect_cb = rk3308_codec_set_jack_detect;
 	}
 
 	if (rk3308->codec_ver == ACODEC_VERSION_A)
@@ -4769,7 +4760,7 @@ static int rk3308_platform_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, rk3308);
 
-	ret = snd_soc_register_codec(&pdev->dev, &soc_codec_dev_rk3308,
+	ret = devm_snd_soc_register_component(&pdev->dev, &soc_codec_dev_rk3308,
 				     rk3308_dai, ARRAY_SIZE(rk3308_dai));
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Failed to register codec: %d\n", ret);
@@ -4798,8 +4789,7 @@ static int rk3308_platform_remove(struct platform_device *pdev)
 	clk_disable_unprepare(rk3308->mclk_rx);
 	clk_disable_unprepare(rk3308->mclk_tx);
 	clk_disable_unprepare(rk3308->pclk);
-	snd_soc_unregister_codec(&pdev->dev);
-	rk3308_codec_sysfs_exit(rk3308);
+	device_unregister(&rk3308->dev);
 
 	return 0;
 }

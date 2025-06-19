@@ -15,17 +15,11 @@
 #ifndef DW_HDMI_HDCP_H
 #define DW_HDMI_HDCP_H
 
+#include <linux/miscdevice.h>
+
 #define DW_HDCP_DRIVER_NAME "dw-hdmi-hdcp"
 #define HDCP_PRIVATE_KEY_SIZE   280
 #define HDCP_KEY_SHA_SIZE       20
-
-enum dw_hdmi_hdcp_state {
-	DW_HDCP_DISABLED,
-	DW_HDCP_AUTH_START,
-	DW_HDCP_AUTH_SUCCESS,
-	DW_HDCP_AUTH_FAIL,
-	DW_HDCP_UNKNOWN,
-};
 
 struct hdcp_keys {
 	u8 KSV[8];

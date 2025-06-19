@@ -13,8 +13,6 @@
 #include <drm/rockchip_drm.h>
 #include <linux/dma-mapping.h>
 #include <linux/dma-buf.h>
-#include <linux/time.h>
-#include <linux/reset.h>
 
 static const char miscdev_name[] = CAMSYS_MARVIN_DEVNAME;
 
@@ -725,7 +723,6 @@ static irqreturn_t camsys_mrv_irq(int irq, void *data)
 	unsigned int isp_mis, mipi_mis, mi_mis, *mis, jpg_mis, jpg_err_mis;
 	unsigned int mi_ris, mi_imis;
 	static unsigned int mipi_frame;
-	struct timeval tv = {0L, 0L};
 
 	isp_mis = __raw_readl((void volatile *)
 				(camsys_dev->devmems.registermem->vir_base +
@@ -805,8 +802,6 @@ static irqreturn_t camsys_mrv_irq(int irq, void *data)
 				}
 				case MRV_MI_MIS:
 				{
-					if (mi_mis & 0x1)
-						do_gettimeofday(&tv);
 					mis = &mi_mis;
 					break;
 				}
@@ -846,7 +841,6 @@ static irqreturn_t camsys_mrv_irq(int irq, void *data)
 						irqsta->sta.fe_id =
 							(mipi_frame >> 16)
 							& 0xFFFF;
-						irqsta->sta.reserved[0] = (tv.tv_sec * 1000LL + tv.tv_usec / 1000) & (0xffff);
 						list_del_init(&irqsta->list);
 						list_add_tail(&irqsta->list,
 							&irqpool->active);
@@ -994,11 +988,12 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 			mrv_clk->clk_vio0_noc =
 				devm_clk_get(&pdev->dev, "clk_vio0_noc");
 			if (IS_ERR_OR_NULL(mrv_clk->clk_vio0_noc)) {
-				camsys_err("Get %s clock resource failed!\n",
+				camsys_err("Get %s clock resouce failed!\n",
 					miscdev_name);
 				err = -EINVAL;
 				goto clk_failed;
 			}
+
 		}
 
 		if (IS_ERR_OR_NULL(mrv_clk->aclk_isp)	 ||
@@ -1008,7 +1003,7 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 			IS_ERR_OR_NULL(mrv_clk->pclkin_isp)  ||
 			IS_ERR_OR_NULL(mrv_clk->cif_clk_out) ||
 			IS_ERR_OR_NULL(mrv_clk->pclk_dphyrx)) {
-			camsys_err("Get %s clock resource failed!\n",
+			camsys_err("Get %s clock resouce failed!\n",
 				miscdev_name);
 			err = -EINVAL;
 			goto clk_failed;
@@ -1018,6 +1013,7 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 		clk_set_rate(mrv_clk->isp_jpe, 210000000);
 
 	} else if (CHIP_TYPE == 3399) {
+
 		pm_runtime_enable(&pdev->dev);
 		if (register_res.start == 0xff920000) {
 			mrv_clk->hclk_isp1_noc	   =
@@ -1034,11 +1030,6 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 				devm_clk_get(&pdev->dev, "pclk_isp1");
 			mrv_clk->pclk_dphytxrx	   =
 				devm_clk_get(&pdev->dev, "pclk_dphytxrx");
-
-			mrv_clk->rst_h_isp1 =
-				devm_reset_control_get(&pdev->dev, "h_isp1");
-			mrv_clk->rst_isp1 =
-				devm_reset_control_get(&pdev->dev, "isp1");
 		} else{
 			mrv_clk->hclk_isp0_noc	   =
 				devm_clk_get(&pdev->dev, "hclk_isp0_noc");
@@ -1052,11 +1043,6 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 				devm_clk_get(&pdev->dev, "clk_isp0");
 			mrv_clk->pclk_dphyrx	   =
 				devm_clk_get(&pdev->dev, "pclk_dphyrx");
-
-			mrv_clk->rst_h_isp0 =
-				devm_reset_control_get(&pdev->dev, "h_isp0");
-			mrv_clk->rst_isp0 =
-				devm_reset_control_get(&pdev->dev, "isp0");
 		}
 		mrv_clk->cif_clk_out	   =
 			devm_clk_get(&pdev->dev, "clk_cif_out");
@@ -1074,14 +1060,7 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 				IS_ERR_OR_NULL(mrv_clk->cif_clk_pll)         ||
 				IS_ERR_OR_NULL(mrv_clk->pclkin_isp)          ||
 				IS_ERR_OR_NULL(mrv_clk->pclk_dphytxrx)) {
-				camsys_err("Get %s clock resource failed!\n",
-					miscdev_name);
-				err = -EINVAL;
-				goto clk_failed;
-			}
-			if (IS_ERR_OR_NULL(mrv_clk->rst_h_isp1) ||
-			    IS_ERR_OR_NULL(mrv_clk->rst_isp1)) {
-				camsys_err("Get %s rest resource failed!\n",
+				camsys_err("Get %s clock resouce failed!\n",
 					miscdev_name);
 				err = -EINVAL;
 				goto clk_failed;
@@ -1095,14 +1074,7 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 				IS_ERR_OR_NULL(mrv_clk->cif_clk_out)         ||
 				IS_ERR_OR_NULL(mrv_clk->cif_clk_pll)         ||
 				IS_ERR_OR_NULL(mrv_clk->pclk_dphyrx)) {
-				camsys_err("Get %s clock resource failed!\n",
-					miscdev_name);
-				err = -EINVAL;
-				goto clk_failed;
-			}
-			if (IS_ERR_OR_NULL(mrv_clk->rst_h_isp0) ||
-			    IS_ERR_OR_NULL(mrv_clk->rst_isp0)) {
-				camsys_err("Get %s rest resource failed!\n",
+				camsys_err("Get %s clock resouce failed!\n",
 					miscdev_name);
 				err = -EINVAL;
 				goto clk_failed;
@@ -1138,7 +1110,7 @@ int camsys_mrv_probe_cb(struct platform_device *pdev, camsys_dev_t *camsys_dev)
 			IS_ERR_OR_NULL(mrv_clk->pclkin_isp)  ||
 			IS_ERR_OR_NULL(mrv_clk->cif_clk_out) ||
 			IS_ERR_OR_NULL(mrv_clk->clk_mipi_24m)) {
-			camsys_err("Get %s clock resource failed!\n",
+			camsys_err("Get %s clock resouce failed!\n",
 				miscdev_name);
 			err = -EINVAL;
 			goto clk_failed;

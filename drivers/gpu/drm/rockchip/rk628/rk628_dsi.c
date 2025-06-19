@@ -15,9 +15,8 @@
 #include <linux/reset.h>
 #include <linux/phy/phy.h>
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic_helper.h>
-#include <drm/drm_crtc_helper.h>
+#include <drm/drm_probe_helper.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_of.h>
 #include <drm/drm_panel.h>
@@ -863,19 +862,13 @@ static int rk628_dsi_connector_get_modes(struct drm_connector *connector)
 {
 	struct rk628_dsi *dsi = connector_to_dsi(connector);
 
-	return drm_panel_get_modes(dsi->panel);
+	return drm_panel_get_modes(dsi->panel, connector);
 }
 
 static struct drm_connector_helper_funcs rk628_dsi_connector_helper_funcs = {
 	.get_modes = rk628_dsi_connector_get_modes,
 	.best_encoder = rk628_dsi_connector_best_encoder,
 };
-
-static enum drm_connector_status
-rk628_dsi_connector_detect(struct drm_connector *connector, bool force)
-{
-	return connector_status_connected;
-}
 
 static void rk628_dsi_drm_connector_destroy(struct drm_connector *connector)
 {
@@ -884,8 +877,6 @@ static void rk628_dsi_drm_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs rk628_dsi_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
-	.detect = rk628_dsi_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rk628_dsi_drm_connector_destroy,
 	.reset = drm_atomic_helper_connector_reset,
@@ -1129,7 +1120,7 @@ static void rk628_dsi_bridge_enable(struct drm_bridge *bridge)
 		bus_width |= COMBTXPHY_MODULEA_EN;
 	phy_set_bus_width(dsi->phy, bus_width);
 
-	ret = phy_set_mode(dsi->phy, PHY_MODE_VIDEO_MIPI);
+	ret = phy_set_mode(dsi->phy, PHY_MODE_MIPI_DPHY);
 	if (ret) {
 		dev_err(dsi->dev, "failed to set phy mode: %d\n", ret);
 		return;
@@ -1158,8 +1149,8 @@ static void rk628_dsi_bridge_disable(struct drm_bridge *bridge)
 }
 
 static void rk628_dsi_bridge_mode_set(struct drm_bridge *bridge,
-				      struct drm_display_mode *mode,
-				      struct drm_display_mode *adj)
+				      const struct drm_display_mode *mode,
+				      const struct drm_display_mode *adj)
 {
 	struct rk628_dsi *dsi = bridge_to_dsi(bridge);
 
@@ -1170,10 +1161,10 @@ static void rk628_dsi_bridge_mode_set(struct drm_bridge *bridge,
 	}
 }
 
-static int rk628_dsi_bridge_attach(struct drm_bridge *bridge)
+static int rk628_dsi_bridge_attach(struct drm_bridge *bridge,
+				   enum drm_bridge_attach_flags flags)
 {
 	struct rk628_dsi *dsi = bridge_to_dsi(bridge);
-	struct device *dev = dsi->dev;
 	struct drm_connector *connector = &dsi->connector;
 	struct drm_device *drm = bridge->dev;
 	int ret;
@@ -1181,7 +1172,8 @@ static int rk628_dsi_bridge_attach(struct drm_bridge *bridge)
 	if (!dsi->panel)
 		return -EPROBE_DEFER;
 
-	connector->port = dev->of_node;
+	if (flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR)
+		return 0;
 
 	ret = drm_connector_init(drm, connector, &rk628_dsi_connector_funcs,
 				 DRM_MODE_CONNECTOR_DSI);
@@ -1191,8 +1183,7 @@ static int rk628_dsi_bridge_attach(struct drm_bridge *bridge)
 	}
 
 	drm_connector_helper_add(connector, &rk628_dsi_connector_helper_funcs);
-	drm_mode_connector_attach_encoder(connector, bridge->encoder);
-	drm_panel_attach(dsi->panel, connector);
+	drm_connector_attach_encoder(connector, bridge->encoder);
 
 	return 0;
 }
@@ -1345,11 +1336,7 @@ static int rk628_dsi_probe(struct platform_device *pdev)
 
 	dsi->base.funcs = &rk628_dsi_bridge_funcs;
 	dsi->base.of_node = dev->of_node;
-	ret = drm_bridge_add(&dsi->base);
-	if (ret) {
-		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
-		return ret;
-	}
+	drm_bridge_add(&dsi->base);
 
 	dsi->host.ops = &rk628_dsi_host_ops;
 	dsi->host.dev = dev;

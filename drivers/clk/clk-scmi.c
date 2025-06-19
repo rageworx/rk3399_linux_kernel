@@ -2,7 +2,7 @@
 /*
  * System Control and Power Interface (SCMI) Protocol based clock driver
  *
- * Copyright (C) 2018 ARM Ltd.
+ * Copyright (C) 2018-2020 ARM Ltd.
  */
 
 #include <linux/clk-provider.h>
@@ -11,14 +11,15 @@
 #include <linux/of.h>
 #include <linux/module.h>
 #include <linux/scmi_protocol.h>
-#include <linux/slab.h>
 #include <asm/div64.h>
+
+static const struct scmi_clk_proto_ops *clk_ops;
 
 struct scmi_clk {
 	u32 id;
 	struct clk_hw hw;
 	const struct scmi_clock_info *info;
-	const struct scmi_handle *handle;
+	const struct scmi_protocol_handle *ph;
 };
 
 #define to_scmi_clk(clk) container_of(clk, struct scmi_clk, hw)
@@ -30,7 +31,7 @@ static unsigned long scmi_clk_recalc_rate(struct clk_hw *hw,
 	u64 rate;
 	struct scmi_clk *clk = to_scmi_clk(hw);
 
-	ret = clk->handle->clk_ops->rate_get(clk->handle, clk->id, &rate);
+	ret = clk_ops->rate_get(clk->ph, clk->id, &rate);
 	if (ret)
 		return 0;
 	return rate;
@@ -70,21 +71,21 @@ static int scmi_clk_set_rate(struct clk_hw *hw, unsigned long rate,
 {
 	struct scmi_clk *clk = to_scmi_clk(hw);
 
-	return clk->handle->clk_ops->rate_set(clk->handle, clk->id, rate);
+	return clk_ops->rate_set(clk->ph, clk->id, rate);
 }
 
 static int scmi_clk_enable(struct clk_hw *hw)
 {
 	struct scmi_clk *clk = to_scmi_clk(hw);
 
-	return clk->handle->clk_ops->enable(clk->handle, clk->id);
+	return clk_ops->enable(clk->ph, clk->id);
 }
 
 static void scmi_clk_disable(struct clk_hw *hw)
 {
 	struct scmi_clk *clk = to_scmi_clk(hw);
 
-	clk->handle->clk_ops->disable(clk->handle, clk->id);
+	clk_ops->disable(clk->ph, clk->id);
 }
 
 static const struct clk_ops scmi_clk_ops = {
@@ -103,20 +104,20 @@ static const struct clk_ops scmi_clk_ops = {
 
 static int scmi_clk_ops_init(struct device *dev, struct scmi_clk *sclk)
 {
+	int ret;
 	unsigned long min_rate, max_rate;
-	struct clk *clk;
 
 	struct clk_init_data init = {
-		.flags = CLK_GET_RATE_NOCACHE | CLK_IS_ROOT,
+		.flags = CLK_GET_RATE_NOCACHE,
 		.num_parents = 0,
 		.ops = &scmi_clk_ops,
 		.name = sclk->info->name,
 	};
 
 	sclk->hw.init = &init;
-	clk = devm_clk_register(dev, &sclk->hw);
-	if (IS_ERR(clk))
-		return -EINVAL;
+	ret = devm_clk_hw_register(dev, &sclk->hw);
+	if (ret)
+		return ret;
 
 	if (sclk->info->rate_discrete) {
 		int num_rates = sclk->info->list.num_rates;
@@ -132,38 +133,39 @@ static int scmi_clk_ops_init(struct device *dev, struct scmi_clk *sclk)
 	}
 
 	clk_hw_set_rate_range(&sclk->hw, min_rate, max_rate);
-	return 0;
+	return ret;
 }
 
 static int scmi_clocks_probe(struct scmi_device *sdev)
 {
 	int idx, count, err;
-	struct clk **clks;
-	struct clk_onecell_data *clk_data;
+	struct clk_hw **hws;
+	struct clk_hw_onecell_data *clk_data;
 	struct device *dev = &sdev->dev;
 	struct device_node *np = dev->of_node;
 	const struct scmi_handle *handle = sdev->handle;
+	struct scmi_protocol_handle *ph;
 
-	if (!handle || !handle->clk_ops)
+	if (!handle)
 		return -ENODEV;
 
-	count = handle->clk_ops->count_get(handle);
+	clk_ops = handle->devm_get_protocol(sdev, SCMI_PROTOCOL_CLOCK, &ph);
+	if (IS_ERR(clk_ops))
+		return PTR_ERR(clk_ops);
+
+	count = clk_ops->count_get(ph);
 	if (count < 0) {
-		dev_err(dev, "%s: invalid clock output count\n", np->name);
+		dev_err(dev, "%pOFn: invalid clock output count\n", np);
 		return -EINVAL;
 	}
 
-	clk_data = devm_kzalloc(dev, sizeof(*clk_data), GFP_KERNEL);
+	clk_data = devm_kzalloc(dev, struct_size(clk_data, hws, count),
+				GFP_KERNEL);
 	if (!clk_data)
 		return -ENOMEM;
 
-	clk_data->clks = devm_kzalloc(dev, sizeof(*clk_data->clks) * count,
-				      GFP_KERNEL);
-	if (!clk_data->clks)
-		return -ENOMEM;
-
-	clk_data->clk_num = count;
-	clks = clk_data->clks;
+	clk_data->num = count;
+	hws = clk_data->hws;
 
 	for (idx = 0; idx < count; idx++) {
 		struct scmi_clk *sclk;
@@ -172,32 +174,32 @@ static int scmi_clocks_probe(struct scmi_device *sdev)
 		if (!sclk)
 			return -ENOMEM;
 
-		sclk->info = handle->clk_ops->info_get(handle, idx);
+		sclk->info = clk_ops->info_get(ph, idx);
 		if (!sclk->info) {
-			dev_info(dev, "invalid clock info for idx %d\n", idx);
+			dev_dbg(dev, "invalid clock info for idx %d\n", idx);
 			continue;
 		}
 
 		sclk->id = idx;
-		sclk->handle = handle;
+		sclk->ph = ph;
 
 		err = scmi_clk_ops_init(dev, sclk);
 		if (err) {
 			dev_err(dev, "failed to register clock %d\n", idx);
-			kfree(sclk);
-			clks[idx] = NULL;
+			devm_kfree(dev, sclk);
+			hws[idx] = NULL;
 		} else {
-			dev_info(dev, "Registered clock:%s\n", sclk->info->name);
-			clks[idx] = sclk->hw.clk;
+			dev_dbg(dev, "Registered clock:%s\n", sclk->info->name);
+			hws[idx] = &sclk->hw;
 		}
 	}
 
-	return of_clk_add_provider(np, of_clk_src_onecell_get,
+	return devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get,
 					   clk_data);
 }
 
 static const struct scmi_device_id scmi_id_table[] = {
-	{ SCMI_PROTOCOL_CLOCK },
+	{ SCMI_PROTOCOL_CLOCK, "clocks" },
 	{ },
 };
 MODULE_DEVICE_TABLE(scmi, scmi_id_table);
@@ -207,21 +209,7 @@ static struct scmi_driver scmi_clocks_driver = {
 	.probe = scmi_clocks_probe,
 	.id_table = scmi_id_table,
 };
-#ifdef CONFIG_ARCH_ROCKCHIP
-static int __init scmi_clocks_driver_init(void)
-{
-	return scmi_register(&scmi_clocks_driver);
-}
-subsys_initcall_sync(scmi_clocks_driver_init);
-
-static void __exit scmi_clocks_driver_exit(void)
-{
-	scmi_unregister(&scmi_clocks_driver);
-}
-module_exit(scmi_clocks_driver_exit);
-#else
 module_scmi_driver(scmi_clocks_driver);
-#endif
 
 MODULE_AUTHOR("Sudeep Holla <sudeep.holla@arm.com>");
 MODULE_DESCRIPTION("ARM SCMI clock driver");

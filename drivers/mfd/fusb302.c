@@ -188,12 +188,12 @@ static void fusb_set_pos_power(struct fusb30x_chip *chip, int max_vol,
 			break;
 		case 1:
 			/* Battery */
-			if ((CAP_VPDO_MAX_VOLTAGE(chip->rec_load[i]) * 50) <=
+			if ((CAP_VPDO_VOLTAGE(chip->rec_load[i]) * 50) <=
 			    max_vol &&
 			    (CAP_VPDO_CURRENT(chip->rec_load[i]) * 10) <=
 			    max_cur) {
 				chip->pos_power = i + 1;
-				tmp = CAP_VPDO_MAX_VOLTAGE(chip->rec_load[i]);
+				tmp = CAP_VPDO_VOLTAGE(chip->rec_load[i]);
 				chip->pd_output_vol = tmp * 50;
 				tmp = CAP_VPDO_CURRENT(chip->rec_load[i]);
 				chip->pd_output_cur = tmp * 10;
@@ -774,7 +774,7 @@ static void tcpm_init(struct fusb30x_chip *chip)
 	val = ~MASKB_M_GCRCSEND;
 	regmap_write(chip->regmap, FUSB_REG_MASKB, val);
 
-	tcpm_select_rp_value(chip, TYPEC_RP_USB);
+	tcpm_select_rp_value(chip, TYPEC_RP_1A5);
 	/* Interrupts Enable */
 	regmap_update_bits(chip->regmap, FUSB_REG_CONTROL0, CONTROL0_INT_MASK,
 			   ~CONTROL0_INT_MASK);
@@ -965,14 +965,13 @@ static void set_mesg(struct fusb30x_chip *chip, int cmd, int is_DMT)
 			switch (CAP_POWER_TYPE(chip->rec_load[chip->pos_power - 1])) {
 			case 0:
 				/* Fixed Supply */
-				chip->send_load[0] |= CAP_FPDO_VOLTAGE(chip->rec_load[chip->pos_power - 1]) << 10;
-				chip->send_load[0] |= CAP_FPDO_CURRENT(chip->rec_load[chip->pos_power - 1]);
+				chip->send_load[0] |= ((CAP_FPDO_VOLTAGE(chip->rec_load[chip->pos_power - 1]) << 10) & 0x3ff);
+				chip->send_load[0] |= (CAP_FPDO_CURRENT(chip->rec_load[chip->pos_power - 1]) & 0x3ff);
 				break;
 			case 1:
 				/* Battery */
-				chip->send_load[0] |= CAP_VPDO_MAX_VOLTAGE(chip->rec_load[chip->pos_power - 1]) << 20;
-				chip->send_load[0] |= CAP_VPDO_MIN_VOLTAGE(chip->rec_load[chip->pos_power - 1]) << 10;
-				chip->send_load[0] |= CAP_VPDO_CURRENT(chip->rec_load[chip->pos_power - 1]);
+				chip->send_load[0] |= ((CAP_VPDO_VOLTAGE(chip->rec_load[chip->pos_power - 1]) << 10) & 0x3ff);
+				chip->send_load[0] |= (CAP_VPDO_CURRENT(chip->rec_load[chip->pos_power - 1]) & 0x3ff);
 				break;
 			default:
 				/* not meet battery caps */
@@ -1693,8 +1692,8 @@ static void fusb_state_attach_wait_source(struct fusb30x_chip *chip, u32 evt)
 					set_state(chip, attached_source);
 			} else {
 				set_state_unattached(chip);
+				return;
 			}
-			return;
 		}
 
 		chip->timer_mux = 2;
@@ -2530,7 +2529,7 @@ static void fusb_state_snk_evaluate_caps(struct fusb30x_chip *chip, u32 evt)
 			break;
 		case 1:
 			/* Battery */
-			if (CAP_VPDO_MAX_VOLTAGE(chip->rec_load[tmp]) <= 100)
+			if (CAP_VPDO_VOLTAGE(chip->rec_load[tmp]) <= 100)
 				chip->pos_power = tmp + 1;
 			break;
 		default:
@@ -3288,8 +3287,7 @@ static void fusb302_work_func(struct work_struct *work)
 	struct fusb30x_chip *chip;
 
 	chip = container_of(work, struct fusb30x_chip, work);
-	if (!chip->suspended)
-		state_machine_typec(chip);
+	state_machine_typec(chip);
 }
 
 static int fusb30x_probe(struct i2c_client *client,
@@ -3525,33 +3523,6 @@ static void fusb30x_shutdown(struct i2c_client *client)
 	}
 }
 
-static int fusb30x_pm_suspend(struct device *dev)
-{
-	struct fusb30x_chip *chip = dev_get_drvdata(dev);
-
-	fusb_irq_disable(chip);
-	chip->suspended = true;
-	cancel_work_sync(&chip->work);
-
-	return 0;
-}
-
-static int fusb30x_pm_resume(struct device *dev)
-{
-	struct fusb30x_chip *chip = dev_get_drvdata(dev);
-
-	fusb_irq_enable(chip);
-	chip->suspended = false;
-	queue_work(chip->fusb30x_wq, &chip->work);
-
-	return 0;
-}
-
-static const struct dev_pm_ops fusb30x_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(fusb30x_pm_suspend,
-				fusb30x_pm_resume)
-};
-
 static const struct of_device_id fusb30x_dt_match[] = {
 	{ .compatible = FUSB30X_I2C_DEVICETREE_NAME },
 	{},
@@ -3568,7 +3539,6 @@ static struct i2c_driver fusb30x_driver = {
 	.driver = {
 		.name = FUSB30X_I2C_DRIVER_NAME,
 		.of_match_table = of_match_ptr(fusb30x_dt_match),
-		.pm = &fusb30x_pm_ops,
 	},
 	.probe = fusb30x_probe,
 	.remove = fusb30x_remove,

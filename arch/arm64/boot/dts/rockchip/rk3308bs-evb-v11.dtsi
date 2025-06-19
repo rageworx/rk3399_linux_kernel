@@ -28,7 +28,7 @@
 		uart_rts_gpios = <&gpio2 RK_PA3 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default", "rts_gpio";
 		pinctrl-0 = <&uart0_rts>;
-		pinctrl-1 = <&uart0_rts_gpio>;
+		pinctrl-1 = <&uart0_rts_pin>;
 		BT,power_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio2 RK_PB0 GPIO_ACTIVE_HIGH>;
 		status = "okay";

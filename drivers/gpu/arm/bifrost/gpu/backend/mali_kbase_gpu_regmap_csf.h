@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2020 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,20 +17,58 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
 
 #ifndef _KBASE_GPU_REGMAP_CSF_H_
 #define _KBASE_GPU_REGMAP_CSF_H_
 
-#if !MALI_USE_CSF
+#include <linux/types.h>
+
+#if !MALI_USE_CSF && defined(__KERNEL__)
 #error "Cannot be compiled with JM"
 #endif
 
-#include "csf/mali_gpu_csf_control_registers.h"
-#define GPU_CONTROL_MCU_REG(r)  (GPU_CONTROL_MCU + (r))
+/* GPU_CONTROL_MCU base address */
+#define GPU_CONTROL_MCU_BASE 0x3000
 
+/* MCU_SUBSYSTEM base address */
+#define MCU_SUBSYSTEM_BASE 0x20000
+
+/* IPA control registers */
+#define IPA_CONTROL_BASE       0x40000
+#define IPA_CONTROL_REG(r)     (IPA_CONTROL_BASE+(r))
+#define COMMAND                0x000 /* (WO) Command register */
+#define STATUS                 0x004 /* (RO) Status register */
+#define TIMER                  0x008 /* (RW) Timer control register */
+
+#define SELECT_CSHW_LO         0x010 /* (RW) Counter select for CS hardware, low word */
+#define SELECT_CSHW_HI         0x014 /* (RW) Counter select for CS hardware, high word */
+#define SELECT_MEMSYS_LO       0x018 /* (RW) Counter select for Memory system, low word */
+#define SELECT_MEMSYS_HI       0x01C /* (RW) Counter select for Memory system, high word */
+#define SELECT_TILER_LO        0x020 /* (RW) Counter select for Tiler cores, low word */
+#define SELECT_TILER_HI        0x024 /* (RW) Counter select for Tiler cores, high word */
+#define SELECT_SHADER_LO       0x028 /* (RW) Counter select for Shader cores, low word */
+#define SELECT_SHADER_HI       0x02C /* (RW) Counter select for Shader cores, high word */
+
+/* Accumulated counter values for CS hardware */
+#define VALUE_CSHW_BASE        0x100
+#define VALUE_CSHW_REG_LO(n)   (VALUE_CSHW_BASE + ((n) << 3))       /* (RO) Counter value #n, low word */
+#define VALUE_CSHW_REG_HI(n)   (VALUE_CSHW_BASE + ((n) << 3) + 4)   /* (RO) Counter value #n, high word */
+
+/* Accumulated counter values for memory system */
+#define VALUE_MEMSYS_BASE      0x140
+#define VALUE_MEMSYS_REG_LO(n) (VALUE_MEMSYS_BASE + ((n) << 3))     /* (RO) Counter value #n, low word */
+#define VALUE_MEMSYS_REG_HI(n) (VALUE_MEMSYS_BASE + ((n) << 3) + 4) /* (RO) Counter value #n, high word */
+
+#define VALUE_TILER_BASE       0x180
+#define VALUE_TILER_REG_LO(n)  (VALUE_TILER_BASE + ((n) << 3))      /* (RO) Counter value #n, low word */
+#define VALUE_TILER_REG_HI(n)  (VALUE_TILER_BASE + ((n) << 3) + 4)  /* (RO) Counter value #n, high word */
+
+#define VALUE_SHADER_BASE      0x1C0
+#define VALUE_SHADER_REG_LO(n) (VALUE_SHADER_BASE + ((n) << 3))     /* (RO) Counter value #n, low word */
+#define VALUE_SHADER_REG_HI(n) (VALUE_SHADER_BASE + ((n) << 3) + 4) /* (RO) Counter value #n, high word */
+
+#define AS_STATUS_AS_ACTIVE_INT 0x2
 
 /* Set to implementation defined, outer caching */
 #define AS_MEMATTR_AARCH64_OUTER_IMPL_DEF 0x88ull
@@ -68,13 +107,14 @@
 /* Normal memory, shared between MCU and Host */
 #define AS_MEMATTR_INDEX_SHARED                6
 
-/* Configuration bits for the Command Stream Frontend. */
+/* Configuration bits for the CSF. */
 #define CSF_CONFIG 0xF00
 
 /* CSF_CONFIG register */
 #define CSF_CONFIG_FORCE_COHERENCY_FEATURES_SHIFT 2
 
 /* GPU control registers */
+#define CORE_FEATURES           0x008   /* () Shader Core Features */
 #define MCU_CONTROL             0x700
 #define MCU_STATUS              0x704
 
@@ -82,31 +122,10 @@
 #define MCU_CNTRL_AUTO          (1 << 1)
 #define MCU_CNTRL_DISABLE       (0)
 
+#define MCU_CNTRL_DOORBELL_DISABLE_SHIFT (31)
+#define MCU_CNTRL_DOORBELL_DISABLE_MASK (1 << MCU_CNTRL_DOORBELL_DISABLE_SHIFT)
+
 #define MCU_STATUS_HALTED        (1 << 1)
-
-#define PRFCNT_BASE_LO   0x060  /* (RW) Performance counter memory
-				 * region base address, low word
-				 */
-#define PRFCNT_BASE_HI   0x064  /* (RW) Performance counter memory
-				 * region base address, high word
-				 */
-#define PRFCNT_CONFIG    0x068  /* (RW) Performance counter
-				 * configuration
-				 */
-
-#define PRFCNT_CSHW_EN   0x06C  /* (RW) Performance counter
-				 * enable for Command Stream Hardware
-				 */
-
-#define PRFCNT_SHADER_EN 0x070  /* (RW) Performance counter enable
-				 * flags for shader cores
-				 */
-#define PRFCNT_TILER_EN  0x074  /* (RW) Performance counter enable
-				 * flags for tiler
-				 */
-#define PRFCNT_MMU_L2_EN 0x07C  /* (RW) Performance counter enable
-				 * flags for MMU/L2 cache
-				 */
 
 /* JOB IRQ flags */
 #define JOB_IRQ_GLOBAL_IF       (1 << 31)   /* Global interface interrupt received */
@@ -114,7 +133,6 @@
 /* GPU_COMMAND codes */
 #define GPU_COMMAND_CODE_NOP                0x00 /* No operation, nothing happens */
 #define GPU_COMMAND_CODE_RESET              0x01 /* Reset the GPU */
-#define GPU_COMMAND_CODE_PRFCNT             0x02 /* Clear or sample performance counters */
 #define GPU_COMMAND_CODE_TIME               0x03 /* Configure time sources */
 #define GPU_COMMAND_CODE_FLUSH_CACHES       0x04 /* Flush caches */
 #define GPU_COMMAND_CODE_SET_PROTECTED_MODE 0x05 /* Places the GPU in protected mode */
@@ -128,7 +146,7 @@
  */
 #define GPU_COMMAND_RESET_PAYLOAD_FAST_RESET 0x00
 
-/* This will leave the state of active command streams UNDEFINED, but will leave the external bus in a defined and
+/* This will leave the state of active CSs UNDEFINED, but will leave the external bus in a defined and
  * idle state.
  */
 #define GPU_COMMAND_RESET_PAYLOAD_SOFT_RESET 0x01
@@ -138,23 +156,27 @@
  */
 #define GPU_COMMAND_RESET_PAYLOAD_HARD_RESET 0x02
 
-/* GPU_COMMAND_PRFCNT payloads */
-#define GPU_COMMAND_PRFCNT_PAYLOAD_SAMPLE 0x01 /* Sample performance counters */
-#define GPU_COMMAND_PRFCNT_PAYLOAD_CLEAR  0x02 /* Clear performance counters */
-
 /* GPU_COMMAND_TIME payloads */
 #define GPU_COMMAND_TIME_DISABLE 0x00 /* Disable cycle counter */
 #define GPU_COMMAND_TIME_ENABLE  0x01 /* Enable cycle counter */
 
-/* GPU_COMMAND_FLUSH_CACHES payloads */
-#define GPU_COMMAND_FLUSH_PAYLOAD_NONE             0x00 /* No flush */
-#define GPU_COMMAND_FLUSH_PAYLOAD_CLEAN            0x01 /* Clean the caches */
-#define GPU_COMMAND_FLUSH_PAYLOAD_INVALIDATE       0x02 /* Invalidate the caches */
-#define GPU_COMMAND_FLUSH_PAYLOAD_CLEAN_INVALIDATE 0x03 /* Clean and invalidate the caches */
+/* GPU_COMMAND_FLUSH_CACHES payloads bits for L2 caches */
+#define GPU_COMMAND_FLUSH_PAYLOAD_L2_NONE 0x000 /* No flush */
+#define GPU_COMMAND_FLUSH_PAYLOAD_L2_CLEAN 0x001 /* CLN only */
+#define GPU_COMMAND_FLUSH_PAYLOAD_L2_CLEAN_INVALIDATE 0x003 /* CLN + INV */
+
+/* GPU_COMMAND_FLUSH_CACHES payloads bits for Load-store caches */
+#define GPU_COMMAND_FLUSH_PAYLOAD_LSC_NONE 0x000 /* No flush */
+#define GPU_COMMAND_FLUSH_PAYLOAD_LSC_CLEAN 0x010 /* CLN only */
+#define GPU_COMMAND_FLUSH_PAYLOAD_LSC_CLEAN_INVALIDATE 0x030 /* CLN + INV */
+
+/* GPU_COMMAND_FLUSH_CACHES payloads bits for Other caches */
+#define GPU_COMMAND_FLUSH_PAYLOAD_OTHER_NONE 0x000 /* No flush */
+#define GPU_COMMAND_FLUSH_PAYLOAD_OTHER_INVALIDATE 0x200 /* INV only */
 
 /* GPU_COMMAND command + payload */
 #define GPU_COMMAND_CODE_PAYLOAD(opcode, payload) \
-	((u32)opcode | ((u32)payload << 8))
+	((__u32)opcode | ((__u32)payload << 8))
 
 /* Final GPU_COMMAND form */
 /* No operation, nothing happens */
@@ -169,14 +191,6 @@
 #define GPU_COMMAND_HARD_RESET \
 	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_RESET, GPU_COMMAND_RESET_PAYLOAD_HARD_RESET)
 
-/* Clear all performance counters, setting them all to zero. */
-#define GPU_COMMAND_PRFCNT_CLEAR \
-	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_PRFCNT, GPU_COMMAND_PRFCNT_PAYLOAD_CLEAR)
-
-/* Sample all performance counters, writing them out to memory */
-#define GPU_COMMAND_PRFCNT_SAMPLE \
-	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_PRFCNT, GPU_COMMAND_PRFCNT_PAYLOAD_SAMPLE)
-
 /* Starts the cycle counter, and system timestamp propagation */
 #define GPU_COMMAND_CYCLE_COUNT_START \
 	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_TIME, GPU_COMMAND_TIME_ENABLE)
@@ -185,13 +199,32 @@
 #define GPU_COMMAND_CYCLE_COUNT_STOP \
 	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_TIME, GPU_COMMAND_TIME_DISABLE)
 
-/* Clean all caches */
-#define GPU_COMMAND_CLEAN_CACHES \
-	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_FLUSH_CACHES, GPU_COMMAND_FLUSH_PAYLOAD_CLEAN)
+/* Clean and invalidate L2 cache (Equivalent to FLUSH_PT) */
+#define GPU_COMMAND_CACHE_CLN_INV_L2                                           \
+	GPU_COMMAND_CODE_PAYLOAD(                                              \
+		GPU_COMMAND_CODE_FLUSH_CACHES,                                 \
+		(GPU_COMMAND_FLUSH_PAYLOAD_L2_CLEAN_INVALIDATE |               \
+		 GPU_COMMAND_FLUSH_PAYLOAD_LSC_NONE |                          \
+		 GPU_COMMAND_FLUSH_PAYLOAD_OTHER_NONE))
 
-/* Clean and invalidate all caches */
-#define GPU_COMMAND_CLEAN_INV_CACHES \
-	GPU_COMMAND_CODE_PAYLOAD(GPU_COMMAND_CODE_FLUSH_CACHES, GPU_COMMAND_FLUSH_PAYLOAD_CLEAN_INVALIDATE)
+/* Clean and invalidate L2 and LSC caches (Equivalent to FLUSH_MEM) */
+#define GPU_COMMAND_CACHE_CLN_INV_L2_LSC                                       \
+	GPU_COMMAND_CODE_PAYLOAD(                                              \
+		GPU_COMMAND_CODE_FLUSH_CACHES,                                 \
+		(GPU_COMMAND_FLUSH_PAYLOAD_L2_CLEAN_INVALIDATE |               \
+		 GPU_COMMAND_FLUSH_PAYLOAD_LSC_CLEAN_INVALIDATE |              \
+		 GPU_COMMAND_FLUSH_PAYLOAD_OTHER_NONE))
+
+/* Clean and invalidate L2, LSC, and Other caches */
+#define GPU_COMMAND_CACHE_CLN_INV_FULL                                         \
+	GPU_COMMAND_CODE_PAYLOAD(                                              \
+		GPU_COMMAND_CODE_FLUSH_CACHES,                                 \
+		(GPU_COMMAND_FLUSH_PAYLOAD_L2_CLEAN_INVALIDATE |               \
+		 GPU_COMMAND_FLUSH_PAYLOAD_LSC_CLEAN_INVALIDATE |              \
+		 GPU_COMMAND_FLUSH_PAYLOAD_OTHER_INVALIDATE))
+
+/* Merge cache flush commands */
+#define GPU_COMMAND_FLUSH_CACHE_MERGE(cmd1, cmd2) ((cmd1) | (cmd2))
 
 /* Places the GPU in protected mode */
 #define GPU_COMMAND_SET_PROTECTED_MODE \
@@ -245,9 +278,12 @@
 #define GPU_FAULTSTATUS_ACCESS_TYPE_WRITE 0x3
 /* End of GPU_FAULTSTATUS_ACCESS_TYPE values */
 
-/* TODO: Remove once 10.x.6 headers became available */
-#define GPU_EXCEPTION_TYPE_SW_FAULT_0 ((u8)0x70)
-#define GPU_EXCEPTION_TYPE_SW_FAULT_1 ((u8)0x71)
+/* Implementation-dependent exception codes used to indicate CSG
+ * and CS errors that are not specified in the specs.
+ */
+#define GPU_EXCEPTION_TYPE_SW_FAULT_0 ((__u8)0x70)
+#define GPU_EXCEPTION_TYPE_SW_FAULT_1 ((__u8)0x71)
+#define GPU_EXCEPTION_TYPE_SW_FAULT_2 ((__u8)0x72)
 
 /* GPU_FAULTSTATUS_EXCEPTION_TYPE values */
 #define GPU_FAULTSTATUS_EXCEPTION_TYPE_OK 0x00
@@ -291,7 +327,11 @@
 #define GPU_IRQ_REG_COMMON (GPU_FAULT | GPU_PROTECTED_FAULT | RESET_COMPLETED \
 			| POWER_CHANGED_ALL | MCU_STATUS_GPU_IRQ)
 
-/* GPU_CONTROL_MCU.GPU_IRQ_RAWSTAT */
-#define PRFCNT_SAMPLE_COMPLETED (1 << 16)   /* Set when performance count sample has completed */
+/* GPU_FEATURES register */
+#define GPU_FEATURES_RAY_TRACING_SHIFT GPU_U(2)
+#define GPU_FEATURES_RAY_TRACING_MASK (GPU_U(0x1) << GPU_FEATURES_RAY_TRACING_SHIFT)
+#define GPU_FEATURES_RAY_TRACING_GET(reg_val) \
+	(((reg_val)&GPU_FEATURES_RAY_TRACING_MASK) >> GPU_FEATURES_RAY_TRACING_SHIFT)
+/* End of GPU_FEATURES register */
 
 #endif /* _KBASE_GPU_REGMAP_CSF_H_ */

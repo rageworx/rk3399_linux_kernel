@@ -63,8 +63,6 @@ struct vpu_session {
 	wait_queue_head_t wait;
 	pid_t pid;
 	atomic_t task_running;
-	unsigned int width;
-	u8 bit_depth;
 };
 
 #endif

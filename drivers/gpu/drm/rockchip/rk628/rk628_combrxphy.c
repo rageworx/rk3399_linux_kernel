@@ -22,7 +22,6 @@ struct rk628_combrxphy {
 	struct regmap *regmap;
 	struct clk *pclk;
 	struct reset_control *rstc;
-	enum phy_mode mode;
 	bool is_cable_mode;
 };
 
@@ -520,7 +519,6 @@ rk628_combrxphy_set_hdmi_mode_for_cable(struct rk628_combrxphy *combrxphy,
 	u32 cdr_mode, cdr_data, pll_man;
 	u32 tmds_bitrate_per_lane;
 	u32 cdr_data_min, cdr_data_max;
-	u32 temp = 0;
 
 	/*
 	 * use the mode of automatic clock detection, only supports fixed TMDS
@@ -555,11 +553,6 @@ rk628_combrxphy_set_hdmi_mode_for_cable(struct rk628_combrxphy *combrxphy,
 	};
 
 	for (i = 0; i < CLK_DET_TRY_TIMES; i++) {
-		regmap_read(combrxphy->regmap, REG(0x6620), &val);
-		if (!temp && val) {
-			temp = val;
-			msleep(200);
-		}
 		if (rk628_combrxphy_try_clk_detect(combrxphy) >= 0)
 			break;
 		usleep_range(100*1000, 100*1000);
@@ -920,7 +913,6 @@ static int rk628_combrxphy_power_off(struct phy *phy)
 	struct rk628_combrxphy *combrxphy = phy_get_drvdata(phy);
 
 	dev_dbg(combrxphy->dev, "%s\n", __func__);
-	regmap_update_bits(combrxphy->regmap, REG(0x6630), BIT(0), BIT(0));
 	reset_control_assert(combrxphy->rstc);
 	udelay(10);
 	clk_disable_unprepare(combrxphy->pclk);
@@ -928,17 +920,7 @@ static int rk628_combrxphy_power_off(struct phy *phy)
 	return 0;
 }
 
-static int rk628_combrxphy_set_mode(struct phy *phy, enum phy_mode mode)
-{
-	struct rk628_combrxphy *combrxphy = phy_get_drvdata(phy);
-
-	combrxphy->mode = mode;
-
-	return 0;
-}
-
 static const struct phy_ops rk628_combrxphy_ops = {
-	.set_mode = rk628_combrxphy_set_mode,
 	.power_on = rk628_combrxphy_power_on,
 	.power_off = rk628_combrxphy_power_off,
 	.owner = THIS_MODULE,

@@ -22,7 +22,6 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
-#include <linux/rockchip/cpu.h>
 
 #define MAX_SUPPLIES		16
 
@@ -618,10 +617,6 @@ static int rockchip_iodomain_probe(struct platform_device *pdev)
 		if (!supply_name)
 			continue;
 
-		/* PX30s pmuio1 not support 1v8 mode switch. */
-		if (soc_is_px30s() && (!strcmp(supply_name, "pmuio1")))
-			continue;
-
 		reg = devm_regulator_get_optional(iod->dev, supply_name);
 		if (IS_ERR(reg)) {
 			ret = PTR_ERR(reg);
@@ -665,7 +660,6 @@ static int rockchip_iodomain_probe(struct platform_device *pdev)
 			goto unreg_notify;
 		}
 
-		dev_info(supply->iod->dev, "%s supplied by %d uV\n", supply_name, uV);
 		/* register regulator notifier */
 		ret = regulator_register_notifier(reg, &supply->nb);
 		if (ret) {

@@ -19,9 +19,7 @@
 
 #include <linux/irq.h>
 #include "gt1x.h"
-#if GTP_ICS_SLOT_REPORT
 #include <linux/input/mt.h>
-#endif
 
 static struct work_struct gt1x_work;
 static struct input_dev *input_dev;
@@ -32,9 +30,9 @@ static const char *input_dev_phys = "input/ts";
 static const struct dev_pm_ops gt1x_ts_pm_ops;
 #endif
 #ifdef GTP_CONFIG_OF
+bool gt1x_gt5688;
 int gt1x_rst_gpio;
 int gt1x_int_gpio;
-static bool power_invert;
 #endif
 
 static int gt1x_register_powermanger(void);
@@ -166,28 +164,30 @@ void gt1x_touch_down(s32 x, s32 y, s32 size, s32 id)
 	GTP_SWAP(x, y);
 #endif
 
-#if GTP_ICS_SLOT_REPORT
-	input_mt_slot(input_dev, id);
-	input_report_abs(input_dev, ABS_MT_PRESSURE, size);
-	input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, size);
-	input_report_abs(input_dev, ABS_MT_TRACKING_ID, id);
-	input_report_abs(input_dev, ABS_MT_POSITION_X, x);
-	input_report_abs(input_dev, ABS_MT_POSITION_Y, y);
-#else
-	input_report_key(input_dev, BTN_TOUCH, 1);
-	if ((!size) && (!id)) {
-		/* for virtual button */
-		input_report_abs(input_dev, ABS_MT_PRESSURE, 100);
-		input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, 100);
-	} else {
+	if (gt1x_ics_slot_report) {
+		input_mt_slot(input_dev, id);
 		input_report_abs(input_dev, ABS_MT_PRESSURE, size);
 		input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, size);
 		input_report_abs(input_dev, ABS_MT_TRACKING_ID, id);
+		input_report_abs(input_dev, ABS_MT_POSITION_X, x);
+		input_report_abs(input_dev, ABS_MT_POSITION_Y, y);
+	} else {
+		input_report_key(input_dev, BTN_TOUCH, 1);
+
+		if ((!size) && (!id)) {
+			/* for virtual button */
+			input_report_abs(input_dev, ABS_MT_PRESSURE, 100);
+			input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, 100);
+		} else {
+			input_report_abs(input_dev, ABS_MT_PRESSURE, size);
+			input_report_abs(input_dev, ABS_MT_TOUCH_MAJOR, size);
+			input_report_abs(input_dev, ABS_MT_TRACKING_ID, id);
+		}
+		input_report_abs(input_dev, ABS_MT_POSITION_X, x);
+		input_report_abs(input_dev, ABS_MT_POSITION_Y, y);
+		input_mt_sync(input_dev);
+
 	}
-	input_report_abs(input_dev, ABS_MT_POSITION_X, x);
-	input_report_abs(input_dev, ABS_MT_POSITION_Y, y);
-	input_mt_sync(input_dev);
-#endif
 }
 
 /**
@@ -197,13 +197,13 @@ void gt1x_touch_down(s32 x, s32 y, s32 size, s32 id)
  */
 void gt1x_touch_up(s32 id)
 {
-#if GTP_ICS_SLOT_REPORT
-	input_mt_slot(input_dev, id);
-	input_report_abs(input_dev, ABS_MT_TRACKING_ID, -1);
-#else
-	input_report_key(input_dev, BTN_TOUCH, 0);
-	input_mt_sync(input_dev);
-#endif
+	if (gt1x_ics_slot_report) {
+		input_mt_slot(input_dev, id);
+		input_report_abs(input_dev, ABS_MT_TRACKING_ID, -1);
+	} else {
+		input_report_key(input_dev, BTN_TOUCH, 0);
+		input_mt_sync(input_dev);
+	}
 }
 
 /**
@@ -277,11 +277,6 @@ static void gt1x_ts_work_func(struct work_struct *work)
 #else
 	ret = gt1x_touch_event_handler(point_data, input_dev, NULL);
 #endif
-	if (ret < 0) {
-#if !GTP_ESD_PROTECT
-		gt1x_power_reset();
-#endif
-	}
 
 exit_work_func:
 	if (!gt1x_rawdiff_mode && (ret >= 0 || ret == ERROR_VALUE)) {
@@ -307,6 +302,7 @@ static struct regulator *vdd_ana;
 static int gt1x_parse_dt(struct device *dev)
 {
 	struct device_node *np;
+	const char *tp_type;
 #ifdef CONFIG_PM
 	struct device_node *root;
 	const char *machine_compatible;
@@ -316,17 +312,20 @@ static int gt1x_parse_dt(struct device *dev)
 		return -ENODEV;
 
 	np = dev->of_node;
+
+	if (!of_property_read_string(np, "goodix,ic_type", &tp_type)) {
+		GTP_INFO("GTP ic_type: %s", tp_type);
+
+		if (strstr(tp_type, "gt5688"))
+			gt1x_gt5688 = true;
+	}
+
 	gt1x_int_gpio = of_get_named_gpio(np, "goodix,irq-gpio", 0);
 	gt1x_rst_gpio = of_get_named_gpio(np, "goodix,rst-gpio", 0);
 
-	if (!gpio_is_valid(gt1x_rst_gpio)) {
-		GTP_INFO("Invalid GPIO, rst-gpio:%d",
-			 gt1x_rst_gpio);
-	}
-
-	if (!gpio_is_valid(gt1x_int_gpio)) {
-		GTP_ERROR("Invalid GPIO, irq-gpio:%d",
-				gt1x_int_gpio);
+	if (!gpio_is_valid(gt1x_int_gpio) || !gpio_is_valid(gt1x_rst_gpio)) {
+		GTP_ERROR("Invalid GPIO, irq-gpio:%d, rst-gpio:%d",
+				gt1x_int_gpio, gt1x_rst_gpio);
 		return -EINVAL;
 	}
 
@@ -337,9 +336,6 @@ static int gt1x_parse_dt(struct device *dev)
 		if (PTR_ERR(vdd_ana) == -ENODEV) {
 			GTP_ERROR("power not specified, ignore power ctrl");
 			vdd_ana = NULL;
-		} else {
-			power_invert = of_property_read_bool(np, "power-invert");
-			GTP_INFO("Power Invert,%s ", power_invert ? "yes" : "no");
 		}
 	}
 	if (IS_ERR(vdd_ana)) {
@@ -347,6 +343,7 @@ static int gt1x_parse_dt(struct device *dev)
 		return PTR_ERR(vdd_ana);
 	}
 
+	gt1x_ics_slot_report = of_property_read_bool(dev->of_node, "gtp_ics_slot_report");
 #ifdef CONFIG_PM
 	root = of_find_node_by_path("/");
 	if (root) {
@@ -367,7 +364,7 @@ static int gt1x_parse_dt(struct device *dev)
  */
 int gt1x_power_switch(int on)
 {
-	int ret = 0;
+	int ret;
 	struct i2c_client *client = gt1x_i2c_client;
 
 	if (!client || !vdd_ana)
@@ -375,22 +372,10 @@ int gt1x_power_switch(int on)
 
 	if (on) {
 		GTP_DEBUG("GTP power on.");
-		if (power_invert) {
-			if (regulator_is_enabled(vdd_ana) > 0)
-				ret = regulator_disable(vdd_ana);
-		} else {
-			if (!regulator_is_enabled(vdd_ana))
-				ret = regulator_enable(vdd_ana);
-		}
+		ret = regulator_enable(vdd_ana);
 	} else {
 		GTP_DEBUG("GTP power off.");
-		if (power_invert) {
-			if (!regulator_is_enabled(vdd_ana))
-				ret = regulator_enable(vdd_ana);
-		} else {
-			if (regulator_is_enabled(vdd_ana) > 0)
-				ret = regulator_disable(vdd_ana);
-		}
+		ret = regulator_disable(vdd_ana);
 	}
 	return ret;
 }
@@ -426,17 +411,14 @@ static s32 gt1x_request_io_port(void)
 	GTP_GPIO_AS_INT(GTP_INT_PORT);
 	gt1x_i2c_client->irq = GTP_INT_IRQ;
 
-	if (gpio_is_valid(gt1x_rst_gpio)) {
-		ret = gpio_request(GTP_RST_PORT, "GTP_RST_PORT");
-		if (ret < 0) {
-			GTP_ERROR("Failed to request GPIO:%d, ERRNO:%d", (s32) GTP_RST_PORT, ret);
-			gpio_free(GTP_INT_PORT);
-			return ret;
-		}
-
-		GTP_GPIO_AS_INPUT(GTP_RST_PORT);
+	ret = gpio_request(GTP_RST_PORT, "GTP_RST_PORT");
+	if (ret < 0) {
+		GTP_ERROR("Failed to request GPIO:%d, ERRNO:%d", (s32) GTP_RST_PORT, ret);
+		gpio_free(GTP_INT_PORT);
+		return ret;
 	}
 
+	GTP_GPIO_AS_INPUT(GTP_RST_PORT);
 	return 0;
 }
 
@@ -487,15 +469,15 @@ static s8 gt1x_request_input_dev(void)
 	}
 
 	input_dev->evbit[0] = BIT_MASK(EV_SYN) | BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
-#if GTP_ICS_SLOT_REPORT
+	if (gt1x_ics_slot_report) {
 #if (LINUX_VERSION_CODE > KERNEL_VERSION(3, 7, 0))
-	input_mt_init_slots(input_dev, 16, INPUT_MT_DIRECT);
+		input_mt_init_slots(input_dev, 16, INPUT_MT_DIRECT);
 #else
-	input_mt_init_slots(input_dev, 16);
+		input_mt_init_slots(input_dev, 16);
 #endif
-#else
-	input_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
-#endif
+	} else {
+		input_dev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
+	}
 	set_bit(INPUT_PROP_DIRECT, input_dev->propbit);
 
 #if GTP_HAVE_TOUCH_KEY
@@ -653,6 +635,7 @@ static int gt1x_ts_remove(struct i2c_client *client)
 #if defined(CONFIG_FB)
 /* frame buffer notifier block control the suspend/resume procedure */
 static struct notifier_block gt1x_fb_notifier;
+static int tp_status;
 
 static int gtp_fb_notifier_callback(struct notifier_block *noti, unsigned long event, void *data)
 {
@@ -664,26 +647,32 @@ static int gtp_fb_notifier_callback(struct notifier_block *noti, unsigned long e
 #error Need add FB_EARLY_EVENT_BLANK to fbmem.c
 #endif
 
-	if (ev_data && ev_data->data && event == FB_EARLY_EVENT_BLANK) {
+	if (ev_data && ev_data->data && event == FB_EARLY_EVENT_BLANK
+	    && tp_status != FB_BLANK_UNBLANK) {
 		blank = ev_data->data;
 		if (*blank == FB_BLANK_UNBLANK) {
+			tp_status = *blank;
 			GTP_DEBUG("Resume by fb notifier.");
 			gt1x_resume();
 		}
 	}
 #else
-	if (ev_data && ev_data->data && event == FB_EVENT_BLANK) {
+	if (ev_data && ev_data->data && event == FB_EVENT_BLANK
+	    && tp_status != FB_BLANK_UNBLANK) {
 		blank = ev_data->data;
 		if (*blank == FB_BLANK_UNBLANK) {
+			tp_status = *blank;
 			GTP_DEBUG("Resume by fb notifier.");
 			gt1x_resume();
 		}
 	}
 #endif
 
-	if (ev_data && ev_data->data && event == FB_EVENT_BLANK) {
+	if (ev_data && ev_data->data && event == FB_EVENT_BLANK
+	    && tp_status == FB_BLANK_UNBLANK) {
 		blank = ev_data->data;
 		if (*blank == FB_BLANK_POWERDOWN) {
+			tp_status = *blank;
 			GTP_DEBUG("Suspend by fb notifier.");
 			gt1x_suspend();
 		}
@@ -741,6 +730,7 @@ static const struct dev_pm_ops gt1x_ts_pm_ops = {
 static int gt1x_register_powermanger(void)
 {
 #if   defined(CONFIG_FB)
+	tp_status = FB_BLANK_UNBLANK;
 	gt1x_fb_notifier.notifier_call = gtp_fb_notifier_callback;
 	fb_register_client(&gt1x_fb_notifier);
 

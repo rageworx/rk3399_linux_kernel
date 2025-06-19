@@ -1198,12 +1198,12 @@ static int bq25700_power_supply_get_property(struct power_supply *psy,
 
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
 		ret = bq25700_field_read(bq, MAX_CHARGE_VOLTAGE);
-		val->intval = ret * 16 * 1000;	/* uV */
+		val->intval = ret * 16;
 		break;
 
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
 		ret = bq25700_field_read(bq, CHARGE_CURRENT);
-		val->intval = ret * 64 * 1000;	/* uA */
+		val->intval = ret * 64;
 		break;
 
 	default:

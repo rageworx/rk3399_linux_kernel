@@ -2,7 +2,7 @@
 /*
  * pisp_dmy driver
  *
- * Copyright (C) 2019 Fuzhou Rockchip Electronics Co., Ltd.
+ * Copyright (C) 2020 Rockchip Electronics Co., Ltd.
  */
 
 #include <linux/clk.h>
@@ -287,7 +287,10 @@ static long pisp_dmy_compat_ioctl32(struct v4l2_subdev *sd,
 
 		ret = pisp_dmy_ioctl(sd, cmd, inf);
 		if (!ret)
-			ret = copy_to_user(up, inf, sizeof(*inf));
+			if (copy_to_user(up, inf, sizeof(*inf))) {
+				kfree(inf);
+				return -EFAULT;
+			}
 		kfree(inf);
 		break;
 	case RKMODULE_AWB_CFG:
@@ -297,9 +300,12 @@ static long pisp_dmy_compat_ioctl32(struct v4l2_subdev *sd,
 			return ret;
 		}
 
-		ret = copy_from_user(cfg, up, sizeof(*cfg));
-		if (!ret)
-			ret = pisp_dmy_ioctl(sd, cmd, cfg);
+		if (copy_from_user(cfg, up, sizeof(*cfg))) {
+			kfree(cfg);
+			return -EFAULT;
+		}
+
+		ret = pisp_dmy_ioctl(sd, cmd, cfg);
 		kfree(cfg);
 		break;
 	default:
@@ -401,8 +407,10 @@ static int pisp_dmy_analyze_dts(struct pisp_dmy *pisp_dmy)
 			devm_kzalloc(&pisp_dmy->client->dev,
 				     elem_size * sizeof(struct pisp_dmy_regulator),
 				     GFP_KERNEL);
-		if (!pisp_dmy->regulators.regulator)
+		if (!pisp_dmy->regulators.regulator) {
 			dev_err(dev, "could not malloc pisp_dmy_regulator\n");
+			return -ENOMEM;
+		}
 
 		pisp_dmy->regulators.cnt = elem_size;
 

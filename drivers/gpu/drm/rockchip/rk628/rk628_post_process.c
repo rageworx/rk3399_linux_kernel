@@ -16,7 +16,11 @@
 #include <video/videomode.h>
 
 #include <drm/drm_of.h>
-#include <drm/drmP.h>
+
+enum rk628_mode_sync_pol {
+	MODE_FLAG_NSYNC,
+	MODE_FLAG_PSYNC,
+};
 
 struct rk628_post_process {
 	struct drm_bridge base;
@@ -31,6 +35,7 @@ struct rk628_post_process {
 	struct reset_control *rstc_clk_rx;
 	struct reset_control *rstc_vop;
 	struct rk628 *parent;
+	int sync_pol;
 };
 
 static inline struct rk628_post_process *bridge_to_pp(struct drm_bridge *bridge)
@@ -44,7 +49,7 @@ static void calc_dsp_frm_hst_vst(const struct videomode *src,
 {
 	u32 bp_in, bp_out;
 	u32 v_scale_ratio;
-	long long t_frm_st;
+	u64 t_frm_st;
 	u64 t_bp_in, t_bp_out, t_delta, tin;
 	u32 src_pixclock, dst_pixclock;
 	u32 dsp_htotal, src_htotal, src_vtotal;
@@ -234,9 +239,9 @@ static void rk628_post_process_bridge_pre_enable(struct drm_bridge *bridge)
 	udelay(10);
 
 	regmap_update_bits(pp->grf, GRF_SYSTEM_CON0, SW_VSYNC_POL_MASK,
-			   SW_VSYNC_POL(1));
+			   SW_VSYNC_POL(pp->sync_pol));
 	regmap_update_bits(pp->grf, GRF_SYSTEM_CON0, SW_HSYNC_POL_MASK,
-			   SW_HSYNC_POL(1));
+			   SW_HSYNC_POL(pp->sync_pol));
 
 	rk628_post_process_scaler_init(pp, src, dst);
 }
@@ -264,15 +269,15 @@ static void rk628_post_process_bridge_disable(struct drm_bridge *bridge)
 }
 
 static void rk628_post_process_bridge_mode_set(struct drm_bridge *bridge,
-					       struct drm_display_mode *mode,
-					       struct drm_display_mode *adj)
+					       const struct drm_display_mode *mode,
+					       const struct drm_display_mode *adj)
 {
 	struct rk628_post_process *pp = bridge_to_pp(bridge);
 	struct rk628 *rk628 = pp->parent;
 
 	drm_mode_copy(&pp->src_mode, adj);
 
-	if (drm_mode_validate_basic(&rk628->dst_mode) == MODE_OK)
+	if (rk628->dst_mode_valid)
 		drm_mode_copy(&pp->dst_mode, &rk628->dst_mode);
 	else
 		drm_mode_copy(&pp->dst_mode, &pp->src_mode);
@@ -282,7 +287,8 @@ static void rk628_post_process_bridge_mode_set(struct drm_bridge *bridge,
 		regmap_write(pp->grf, GRF_CSC_CTRL_CON, SW_Y2R_EN(1));
 }
 
-static int rk628_post_process_bridge_attach(struct drm_bridge *bridge)
+static int rk628_post_process_bridge_attach(struct drm_bridge *bridge,
+					    enum drm_bridge_attach_flags flags)
 {
 	struct rk628_post_process *pp = bridge_to_pp(bridge);
 	struct device *dev = pp->dev;
@@ -293,15 +299,11 @@ static int rk628_post_process_bridge_attach(struct drm_bridge *bridge)
 	if (ret)
 		return ret;
 
-	pp->bridge->encoder = bridge->encoder;
-
-	ret = drm_bridge_attach(bridge->dev, pp->bridge);
+	ret = drm_bridge_attach(bridge->encoder, pp->bridge, bridge, flags);
 	if (ret) {
 		dev_err(dev, "failed to attach bridge\n");
 		return ret;
 	}
-
-	bridge->next = pp->bridge;
 
 	return 0;
 }
@@ -311,9 +313,15 @@ rk628_post_process_bridge_mode_fixup(struct drm_bridge *bridge,
 				     const struct drm_display_mode *mode,
 				     struct drm_display_mode *adj)
 {
-	/* Fixup sync polarities, both hsync and vsync are active high */
-	adj->flags &= ~(DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC);
-	adj->flags |= (DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC);
+	struct rk628_post_process *pp = bridge_to_pp(bridge);
+
+	if (pp->sync_pol == MODE_FLAG_NSYNC) {
+		adj->flags &= ~(DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC);
+		adj->flags |= (DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC);
+	} else {
+		adj->flags &= ~(DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC);
+		adj->flags |= (DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC);
+	}
 
 	return true;
 }
@@ -328,6 +336,7 @@ static const struct drm_bridge_funcs rk628_post_process_bridge_funcs = {
 	.attach = rk628_post_process_bridge_attach,
 };
 
+
 /**
  * rk628_scaler_add_src_mode - add source mode for scaler
  * @rk628: parent device
@@ -339,12 +348,12 @@ int rk628_scaler_add_src_mode(struct rk628 *rk628,
 {
 	struct drm_display_mode *pmode;
 	struct drm_display_mode *dst;
-	int found = 0;
 
 	if (!rk628 || !connector)
 		return 0;
 
-	if (drm_mode_validate_basic(&rk628->src_mode) != MODE_OK)
+	if (drm_mode_validate_driver(connector->dev, &rk628->src_mode) !=
+	    MODE_OK)
 		return 0;
 
 	list_for_each_entry(pmode, &connector->probed_modes, head) {
@@ -352,11 +361,11 @@ int rk628_scaler_add_src_mode(struct rk628 *rk628,
 			drm_mode_copy(&rk628->dst_mode, pmode);
 			drm_mode_copy(pmode, &rk628->src_mode);
 			pmode->type |= DRM_MODE_TYPE_PREFERRED;
-			found = 1;
+			rk628->dst_mode_valid = true;
 			break;
 		}
 	}
-	if (found) {
+	if (rk628->dst_mode_valid) {
 		dst = drm_mode_duplicate(connector->dev, &rk628->dst_mode);
 		dst->type &= ~DRM_MODE_TYPE_PREFERRED;
 		drm_mode_probed_add(connector, dst);
@@ -375,9 +384,9 @@ EXPORT_SYMBOL(rk628_scaler_add_src_mode);
  * Call the function at mode_set, replace drm_mode_copy.
  */
 void rk628_mode_copy(struct rk628 *rk628, struct drm_display_mode *dst,
-		     struct drm_display_mode *src)
+		     const struct drm_display_mode *src)
 {
-	if (drm_mode_validate_basic(&rk628->dst_mode) == MODE_OK)
+	if (rk628->dst_mode_valid)
 		drm_mode_copy(dst, &rk628->dst_mode);
 	else
 		drm_mode_copy(dst, src);
@@ -389,6 +398,8 @@ static int rk628_post_process_probe(struct platform_device *pdev)
 	struct rk628 *rk628 = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
 	struct rk628_post_process *pp;
+	u32 bus_flags;
+	u32 val;
 	int ret;
 
 	if (!of_device_is_available(dev->of_node))
@@ -438,15 +449,18 @@ static int rk628_post_process_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	ret = of_property_read_u32(dev->of_node, "mode-sync-pol", &val);
+	if (ret < 0)
+		pp->sync_pol = MODE_FLAG_PSYNC;
+	else
+		pp->sync_pol = (!val ? MODE_FLAG_NSYNC : MODE_FLAG_PSYNC);
+
 	pp->base.funcs = &rk628_post_process_bridge_funcs;
 	pp->base.of_node = dev->of_node;
-	ret = drm_bridge_add(&pp->base);
-	if (ret) {
-		dev_err(dev, "failed to add bridge\n");
-		return ret;
-	}
+	drm_bridge_add(&pp->base);
 
-	of_get_drm_display_mode(dev->of_node, &rk628->src_mode, 0);
+	of_get_drm_display_mode(dev->of_node, &rk628->src_mode, &bus_flags,
+				OF_USE_NATIVE_MODE);
 
 	return 0;
 }

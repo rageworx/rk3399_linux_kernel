@@ -7,6 +7,8 @@
  * V0.0X01.0X01 add poweron function.
  * V0.0X01.0X02 fix mclk issue when probe multiple camera.
  * V0.0X01.0X03 add enum_frame_interval function.
+ * V0.0X01.0X04 add quick stream on/off
+ * V0.0X01.0X05 add function g_mbus_config
  */
 
 #include <linux/clk.h>
@@ -27,7 +29,7 @@
 #include <media/v4l2-subdev.h>
 #include <linux/pinctrl/consumer.h>
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x03)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x05)
 
 #ifndef V4L2_CID_DIGITAL_GAIN
 #define V4L2_CID_DIGITAL_GAIN		V4L2_CID_GAIN
@@ -112,6 +114,7 @@ struct ov13850_mode {
 struct ov13850 {
 	struct i2c_client	*client;
 	struct clk		*xvclk;
+	struct gpio_desc	*power_gpio;
 	struct gpio_desc	*reset_gpio;
 	struct gpio_desc	*pwdn_gpio;
 	struct regulator_bulk_data supplies[OV13850_NUM_SUPPLIES];
@@ -280,6 +283,7 @@ static const struct regval ov13850_global_regs_r1a[] = {
 	{0x4601, 0x04},
 	{0x4602, 0x22},
 	{0x4603, 0x01},
+	{0x4800, 0x24}, //MIPI CLK control
 	{0x4837, 0x1b},
 	{0x4d00, 0x04},
 	{0x4d01, 0x42},
@@ -334,6 +338,7 @@ static const struct regval ov13850_global_regs_r1a[] = {
 	{0x5b09, 0x02},
 	{0x5e00, 0x00},
 	{0x5e10, 0x1c},
+	{0x0102, 0x01}, //Fast standby enable
 	{REG_NULL, 0x00},
 };
 
@@ -508,6 +513,7 @@ static const struct regval ov13850_global_regs_r2a[] = {
 	{0x4601, 0x83},
 	{0x4602, 0x22},
 	{0x4603, 0x01},
+	{0x4800, 0x24}, //MIPI CLK control
 	{0x4837, 0x19},
 	{0x4d00, 0x04},
 	{0x4d01, 0x42},
@@ -547,6 +553,7 @@ static const struct regval ov13850_global_regs_r2a[] = {
 	{0x5b09, 0x02},
 	{0x5e00, 0x00},
 	{0x5e10, 0x1c},
+	{0x0102, 0x01}, //Fast standby enable
 	{REG_NULL, 0x00},
 };
 
@@ -682,6 +689,8 @@ static int ov13850_write_reg(struct i2c_client *client, u16 reg,
 	u8 buf[6];
 	u8 *val_p;
 	__be32 val_be;
+
+	dev_dbg(&client->dev, "write reg(0x%x val:0x%x)!\n", reg, val);
 
 	if (len > 4)
 		return -EINVAL;
@@ -914,10 +923,26 @@ static long ov13850_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct ov13850 *ov13850 = to_ov13850(sd);
 	long ret = 0;
+	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
 		ov13850_get_module_inf(ov13850, (struct rkmodule_inf *)arg);
+		break;
+	case RKMODULE_SET_QUICK_STREAM:
+
+		stream = *((u32 *)arg);
+
+		if (stream)
+			ret = ov13850_write_reg(ov13850->client,
+				 OV13850_REG_CTRL_MODE,
+				 OV13850_REG_VALUE_08BIT,
+				 OV13850_MODE_STREAMING);
+		else
+			ret = ov13850_write_reg(ov13850->client,
+				 OV13850_REG_CTRL_MODE,
+				 OV13850_REG_VALUE_08BIT,
+				 OV13850_MODE_SW_STANDBY);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -935,6 +960,7 @@ static long ov13850_compat_ioctl32(struct v4l2_subdev *sd,
 	struct rkmodule_inf *inf;
 	struct rkmodule_awb_cfg *cfg;
 	long ret;
+	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
@@ -960,6 +986,11 @@ static long ov13850_compat_ioctl32(struct v4l2_subdev *sd,
 		if (!ret)
 			ret = ov13850_ioctl(sd, cmd, cfg);
 		kfree(cfg);
+		break;
+	case RKMODULE_SET_QUICK_STREAM:
+		ret = copy_from_user(&stream, up, sizeof(u32));
+		if (!ret)
+			ret = ov13850_ioctl(sd, cmd, &stream);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -1086,6 +1117,11 @@ static int __ov13850_power_on(struct ov13850 *ov13850)
 	u32 delay_us;
 	struct device *dev = &ov13850->client->dev;
 
+	if (!IS_ERR(ov13850->power_gpio))
+		gpiod_set_value_cansleep(ov13850->power_gpio, 1);
+
+	usleep_range(1000, 2000);
+
 	if (!IS_ERR_OR_NULL(ov13850->pins_default)) {
 		ret = pinctrl_select_state(ov13850->pinctrl,
 					   ov13850->pins_default);
@@ -1140,12 +1176,16 @@ static void __ov13850_power_off(struct ov13850 *ov13850)
 	clk_disable_unprepare(ov13850->xvclk);
 	if (!IS_ERR(ov13850->reset_gpio))
 		gpiod_set_value_cansleep(ov13850->reset_gpio, 0);
+
 	if (!IS_ERR_OR_NULL(ov13850->pins_sleep)) {
 		ret = pinctrl_select_state(ov13850->pinctrl,
 					   ov13850->pins_sleep);
 		if (ret < 0)
 			dev_dbg(dev, "could not set pins\n");
 	}
+	if (!IS_ERR(ov13850->power_gpio))
+		gpiod_set_value_cansleep(ov13850->power_gpio, 0);
+
 	regulator_bulk_disable(OV13850_NUM_SUPPLIES, ov13850->supplies);
 }
 
@@ -1207,6 +1247,20 @@ static int ov13850_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int ov13850_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
+				struct v4l2_mbus_config *config)
+{
+	u32 val = 0;
+
+	val = 1 << (OV13850_LANES - 1) |
+	      V4L2_MBUS_CSI2_CHANNEL_0 |
+	      V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
+	config->type = V4L2_MBUS_CSI2_DPHY;
+	config->flags = val;
+
+	return 0;
+}
+
 static const struct dev_pm_ops ov13850_pm_ops = {
 	SET_RUNTIME_PM_OPS(ov13850_runtime_suspend,
 			   ov13850_runtime_resume, NULL)
@@ -1237,6 +1291,7 @@ static const struct v4l2_subdev_pad_ops ov13850_pad_ops = {
 	.enum_frame_interval = ov13850_enum_frame_interval,
 	.get_fmt = ov13850_get_fmt,
 	.set_fmt = ov13850_set_fmt,
+	.get_mbus_config = ov13850_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops ov13850_subdev_ops = {
@@ -1265,7 +1320,7 @@ static int ov13850_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
-	if (pm_runtime_get(&client->dev) <= 0)
+	if (!pm_runtime_get_if_in_use(&client->dev))
 		return 0;
 
 	switch (ctrl->id) {
@@ -1463,6 +1518,10 @@ static int ov13850_probe(struct i2c_client *client,
 		return -EINVAL;
 	}
 
+	ov13850->power_gpio = devm_gpiod_get(dev, "power", GPIOD_OUT_LOW);
+	if (IS_ERR(ov13850->power_gpio))
+		dev_warn(dev, "Failed to get power-gpios, maybe no use\n");
+
 	ov13850->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(ov13850->reset_gpio))
 		dev_warn(dev, "Failed to get reset-gpios\n");
@@ -1514,8 +1573,8 @@ static int ov13850_probe(struct i2c_client *client,
 #endif
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	ov13850->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &ov13850->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, 1, &ov13850->pad);
 	if (ret < 0)
 		goto err_power_off;
 #endif

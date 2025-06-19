@@ -11,6 +11,10 @@
 	compatible = "rockchip,px30-evb-ddr3-v10-avb", "rockchip,px30";
 };
 
+&chosen {
+	bootargs_ext = "androidboot.boot_devices=ff390000.dwmmc,ff3b0000.nandc";
+};
+
 &dsi {
 	status = "okay";
 
@@ -102,36 +106,4 @@
 			};
 		};
 	};
-};
-
-&firmware_android {
-	compatible = "android,firmware";
-	boot_devices = "ff390000.dwmmc,ff3b0000.nandc";
-	vbmeta {
-		compatible = "android,vbmeta";
-		parts = "vbmeta,boot,system,vendor,dtbo";
-	};
-	fstab {
-		compatible = "android,fstab";
-		vendor {
-			compatible = "android,vendor";
-			dev = "/dev/block/by-name/vendor";
-			type = "ext4";
-			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
-			fsmgr_flags = "wait,avb";
-		};
-	};
-};
-
-&gmac {
-	phy-supply = <&vcc_phy>;
-	clock_in_out = "input";
-	assigned-clocks = <&cru SCLK_GMAC>;
-	assigned-clock-parents = <&gmac_clkin>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&rmii_pins &mac_refclk>;
-	snps,reset-gpio = <&gpio2 13 GPIO_ACTIVE_LOW>;
-	snps,reset-active-low;
-	snps,reset-delays-us = <0 50000 50000>;
-	status = "okay";
 };

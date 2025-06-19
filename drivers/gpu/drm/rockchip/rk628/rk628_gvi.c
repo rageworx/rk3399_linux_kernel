@@ -12,10 +12,10 @@
 #include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/mfd/rk628.h>
-#include <drm/drmP.h>
+
 #include <drm/drm_of.h>
 #include <drm/drm_atomic.h>
-#include <drm/drm_crtc_helper.h>
+#include <drm/drm_probe_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_panel.h>
 #include <video/of_display_timing.h>
@@ -247,7 +247,6 @@ struct rk628_gvi {
 	u8 color_depth;
 	u8 byte_mode;
 	bool division_mode;
-	bool frm_rst;
 };
 
 static inline struct rk628_gvi *bridge_to_gvi(struct drm_bridge *b)
@@ -274,7 +273,7 @@ static int rk628_gvi_connector_get_modes(struct drm_connector *connector)
 	struct drm_display_info *info = &connector->display_info;
 	int num_modes;
 
-	num_modes = drm_panel_get_modes(gvi->panel);
+	num_modes = drm_panel_get_modes(gvi->panel, connector);
 
 	if (info->num_bus_formats)
 		gvi->bus_format = info->bus_formats[0];
@@ -335,14 +334,10 @@ rk628_gvi_connector_detect(struct drm_connector *connector, bool force)
 
 static void rk628_gvi_connector_destroy(struct drm_connector *connector)
 {
-	struct rk628_gvi *gvi = connector_to_gvi(connector);
-
-	drm_panel_detach(gvi->panel);
 	drm_connector_cleanup(connector);
 }
 
 static const struct drm_connector_funcs rk628_gvi_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = rk628_gvi_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rk628_gvi_connector_destroy,
@@ -356,7 +351,7 @@ static unsigned int rk628_gvi_get_lane_rate(struct rk628_gvi *gvi)
 	struct device *dev = gvi->dev;
 	const struct drm_display_mode *mode = &gvi->mode;
 	u32 lane_bit_rate, min_lane_rate = 500000, max_lane_rate = 4000000;
-	unsigned long total_bw;
+	u64 total_bw;
 
 	/* optional override of the desired bandwidth */
 	if (!of_property_read_u32
@@ -443,8 +438,7 @@ static void rk628_gvi_pre_enable(struct rk628_gvi *gvi)
 	regmap_write_bits(gvi->regmap, GVI_SYS_CTRL1, SYS_CTRL1_DUAL_PIXEL_EN,
 			  gvi->division_mode ? SYS_CTRL1_DUAL_PIXEL_EN : 0);
 
-	regmap_write_bits(gvi->regmap, GVI_SYS_CTRL0, SYS_CTRL0_FRM_RST_EN,
-			  gvi->frm_rst ? SYS_CTRL0_FRM_RST_EN : 0);
+	regmap_write_bits(gvi->regmap, GVI_SYS_CTRL0, SYS_CTRL0_FRM_RST_EN, 0);
 	regmap_write_bits(gvi->regmap, GVI_SYS_CTRL1, SYS_CTRL1_LANE_ALIGN_EN, 0);
 }
 
@@ -466,7 +460,7 @@ static void rk628_gvi_bridge_enable(struct drm_bridge *bridge)
 			   SW_OUTPUT_MODE(OUTPUT_MODE_GVI));
 	phy_set_bus_width(gvi->phy, rate);
 	rk628_combtxphy_set_gvi_division_mode(gvi->phy, gvi->division_mode);
-	ret = phy_set_mode(gvi->phy, PHY_MODE_GVI);
+	ret = phy_set_mode(gvi->phy, 0);
 	if (ret) {
 		dev_err(gvi->dev, "failed to set phy mode: %d\n", ret);
 		return;
@@ -503,15 +497,17 @@ static void rk628_gvi_bridge_disable(struct drm_bridge *bridge)
 	phy_power_off(gvi->phy);
 }
 
-static int rk628_gvi_bridge_attach(struct drm_bridge *bridge)
+static int rk628_gvi_bridge_attach(struct drm_bridge *bridge,
+				   enum drm_bridge_attach_flags flags)
 {
 	struct rk628_gvi *gvi = bridge_to_gvi(bridge);
-	struct device *dev = gvi->dev;
 	struct drm_connector *connector = &gvi->connector;
 	struct drm_device *drm = bridge->dev;
 	int ret;
 
-	connector->port = dev->of_node;
+	if (flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR)
+		return 0;
+
 	ret = drm_connector_init(drm, connector, &rk628_gvi_connector_funcs,
 				 DRM_MODE_CONNECTOR_LVDS);
 	if (ret) {
@@ -520,20 +516,14 @@ static int rk628_gvi_bridge_attach(struct drm_bridge *bridge)
 	}
 
 	drm_connector_helper_add(connector, &rk628_gvi_connector_helper_funcs);
-	drm_mode_connector_attach_encoder(connector, bridge->encoder);
-
-	ret = drm_panel_attach(gvi->panel, connector);
-	if (ret) {
-		dev_err(gvi->dev, "Failed to attach panel\n");
-		return ret;
-	}
+	drm_connector_attach_encoder(connector, bridge->encoder);
 
 	return 0;
 }
 
 static void rk628_gvi_bridge_mode_set(struct drm_bridge *bridge,
-				      struct drm_display_mode *mode,
-				      struct drm_display_mode *adj)
+				      const struct drm_display_mode *mode,
+				      const struct drm_display_mode *adj)
 {
 	struct rk628_gvi *gvi = bridge_to_gvi(bridge);
 
@@ -576,7 +566,7 @@ static int rk628_gvi_probe(struct platform_device *pdev)
 	struct rk628 *rk628 = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
 	struct rk628_gvi *gvi;
-	int ret;
+	int ret = 0;
 
 	if (!of_device_is_available(dev->of_node))
 		return -ENODEV;
@@ -594,7 +584,6 @@ static int rk628_gvi_probe(struct platform_device *pdev)
 	gvi->parent = rk628;
 	gvi->division_mode = of_property_read_bool(dev->of_node,
 						   "rockchip,division-mode");
-	gvi->frm_rst = of_property_read_bool(dev->of_node, "rockchip,gvi-frm-rst");
 	ret = of_property_read_u32(dev->of_node, "rockchip,lane-num",
 				   &gvi->lane_num);
 	if (ret) {
@@ -638,11 +627,7 @@ static int rk628_gvi_probe(struct platform_device *pdev)
 
 	gvi->base.funcs = &rk628_gvi_bridge_funcs;
 	gvi->base.of_node = dev->of_node;
-	ret = drm_bridge_add(&gvi->base);
-	if (ret) {
-		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
-		return ret;
-	}
+	drm_bridge_add(&gvi->base);
 
 	return 0;
 }

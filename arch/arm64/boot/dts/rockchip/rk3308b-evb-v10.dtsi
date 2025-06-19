@@ -11,7 +11,7 @@
 	compatible = "rockchip,rk3308b-evb-v10", "rockchip,rk3308";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff0e0000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
+		bootargs = "earlycon=uart8250,mmio32,0xff0e0000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
 	};
 
 	acodec_sound: acodec-sound {
@@ -68,7 +68,7 @@
 		rockchip,mclk-fs = <128>;
 		rockchip,cpu = <&i2s_8ch_0>;
 		rockchip,codec = <&dummy_codec>;
-		rockchip,format = "dsp_a";
+		rockchip,format = "dsp_b";
 		rockchip,bitclock-inversion = <0>;
 		rockchip,wait-card-locked = <0>;
 	};
@@ -109,9 +109,10 @@
 	};
 
 	spdif_rx_sound: spdif-rx-sound {
-		status = "disabled";
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "rockchip,spdif-rx-sound";
+		status = "disabled";
+
 		simple-audio-card,cpu {
 			sound-dai = <&spdif_rx>;
 		};
@@ -121,9 +122,10 @@
 	};
 
 	spdif_tx_sound: spdif-tx-sound {
-		status = "disabled";
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "rockchip,spdif-tx-sound";
+		status = "disabled";
+
 		simple-audio-card,cpu {
 			sound-dai = <&spdif_tx>;
 		};
@@ -163,6 +165,15 @@
 		regulator-max-microvolt = <1000000>;
 	};
 
+	vcc_3v3_codec: vcc_io: vcc-io {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_io";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+	};
+
 	vccio_sdio: vcc_1v8: vcc-1v8 {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc_1v8";
@@ -192,23 +203,13 @@
 		regulator-max-microvolt = <1500000>;
 	};
 
-	vcc_3v3_codec: vcc_io: vcc-io {
-		compatible = "regulator-fixed";
-		regulator-name = "vcc_io";
-		regulator-always-on;
-		regulator-boot-on;
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-	};
-
 	vccio_flash: vccio-flash {
 		compatible = "regulator-fixed";
 		regulator-name = "vccio_flash";
 		regulator-always-on;
 		regulator-boot-on;
-		regulator-min-microvolt = <3300000>;
-		regulator-max-microvolt = <3300000>;
-		vin-supply = <&vcc_io>;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
 	};
 
 	vcc_phy: vcc-phy-regulator {
@@ -232,7 +233,7 @@
 		uart_rts_gpios = <&gpio2 RK_PA3 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default", "rts_gpio";
 		pinctrl-0 = <&uart0_rts>;
-		pinctrl-1 = <&uart0_rts_gpio>;
+		pinctrl-1 = <&uart0_rts_pin>;
 		BT,power_gpio    = <&gpio2 RK_PA6 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio2 RK_PB0 GPIO_ACTIVE_HIGH>;
 		status = "okay";
@@ -288,7 +289,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -726,6 +728,14 @@
 	status = "okay";
 };
 
+&spdif_rx {
+	#sound-dai-cells = <0>;
+};
+
+&spdif_tx {
+	#sound-dai-cells = <0>;
+};
+
 &saradc {
 	status = "okay";
 	vref-supply = <&vcc_1v8>;
@@ -734,7 +744,8 @@
 &sdmmc {
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;

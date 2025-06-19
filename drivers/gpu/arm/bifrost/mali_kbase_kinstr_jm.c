@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2020 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,8 +17,6 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
 
 /*
@@ -26,18 +25,19 @@
  */
 
 #include "mali_kbase_kinstr_jm.h"
-#include "mali_kbase_kinstr_jm_reader.h"
+#include <uapi/gpu/arm/bifrost/mali_kbase_kinstr_jm_reader.h>
 
 #include "mali_kbase.h"
 #include "mali_kbase_linux.h"
 
-#include <mali_kbase_jm_rb.h>
+#include <backend/gpu/mali_kbase_jm_rb.h>
 
 #include <asm/barrier.h>
 #include <linux/anon_inodes.h>
 #include <linux/circ_buf.h>
 #include <linux/fs.h>
 #include <linux/kref.h>
+#include <linux/ktime.h>
 #include <linux/log2.h>
 #include <linux/mutex.h>
 #include <linux/rculist_bl.h>
@@ -47,9 +47,14 @@
 #include <linux/version.h>
 #include <linux/wait.h>
 
+/* Define static_assert().
+ *
+ * The macro was introduced in kernel 5.1. But older vendor kernels may define
+ * it too.
+ */
 #if KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE
 #include <linux/build_bug.h>
-#else
+#elif !defined(static_assert)
 // Stringify the expression if no message is given.
 #define static_assert(e, ...)  __static_assert(e, #__VA_ARGS__, #e)
 #define __static_assert(e, msg, ...) _Static_assert(e, msg)
@@ -69,15 +74,9 @@ typedef unsigned int __poll_t;
 /* Allows us to perform ASM goto for the tracing
  * https://www.kernel.org/doc/Documentation/static-keys.txt
  */
-#if KERNEL_VERSION(4, 3, 0) <= LINUX_VERSION_CODE
 DEFINE_STATIC_KEY_FALSE(basep_kinstr_jm_reader_static_key);
-#else
-struct static_key basep_kinstr_jm_reader_static_key = STATIC_KEY_INIT_FALSE;
-#define static_branch_inc(key) static_key_slow_inc(key)
-#define static_branch_dec(key) static_key_slow_dec(key)
-#endif /* KERNEL_VERSION(4 ,3, 0) <= LINUX_VERSION_CODE */
 
-#define KBASE_KINSTR_JM_VERSION 1
+#define KBASE_KINSTR_JM_VERSION 2
 
 /**
  * struct kbase_kinstr_jm - The context for the kernel job manager atom tracing
@@ -105,6 +104,11 @@ struct kbase_kinstr_jm {
  *             KBASE_KINSTR_JM_ATOM_STATE_FLAG_* defines.
  * @reserved:  Reserved for future use.
  * @data:      Extra data for the state change. Active member depends on state.
+ * @data.start:      Extra data for the state change. Active member depends on
+ *                   state.
+ * @data.start.slot: Extra data for the state change. Active member depends on
+ *                   state.
+ * @data.padding:    Padding
  *
  * We can add new fields to the structure and old user code will gracefully
  * ignore the new fields.
@@ -205,9 +209,8 @@ struct reader_changes {
  */
 static inline bool reader_changes_is_valid_size(const size_t size)
 {
-	typedef struct reader_changes changes_t;
-	const size_t elem_size = sizeof(*((changes_t *)0)->data);
-	const size_t size_size = sizeof(((changes_t *)0)->size);
+	const size_t elem_size = sizeof(*((struct reader_changes *)0)->data);
+	const size_t size_size = sizeof(((struct reader_changes *)0)->size);
 	const size_t size_max = (1ull << (size_size * 8)) - 1;
 
 	return is_power_of_2(size) && /* Is a power of two */
@@ -663,7 +666,7 @@ static const struct file_operations file_operations = {
 static const size_t kbase_kinstr_jm_readers_max = 16;
 
 /**
- * kbasep_kinstr_jm_release() - Invoked when the reference count is dropped
+ * kbase_kinstr_jm_release() - Invoked when the reference count is dropped
  * @ref: the context reference count
  */
 static void kbase_kinstr_jm_release(struct kref *const ref)
@@ -734,7 +737,7 @@ static int kbase_kinstr_jm_readers_add(struct kbase_kinstr_jm *const ctx,
 }
 
 /**
- * readers_del() - Deletes a reader from the list of readers
+ * kbase_kinstr_jm_readers_del() - Deletes a reader from the list of readers
  * @ctx: the instrumentation context
  * @reader: the reader to delete
  */
@@ -813,22 +816,6 @@ void kbase_kinstr_jm_term(struct kbase_kinstr_jm *const ctx)
 	kbase_kinstr_jm_ref_put(ctx);
 }
 
-/**
- * timestamp() - Retrieves the current monotonic nanoseconds
- * Return: monotonic nanoseconds timestamp.
- */
-static u64 timestamp(void)
-{
-	struct timespec ts;
-	long ns;
-
-	getrawmonotonic(&ts);
-	ns = ((long)(ts.tv_sec) * NSEC_PER_SEC) + ts.tv_nsec;
-	if (unlikely(ns < 0))
-		return 0;
-	return ((u64)(ns));
-}
-
 void kbasep_kinstr_jm_atom_state(
 	struct kbase_jd_atom *const katom,
 	const enum kbase_kinstr_jm_reader_atom_state state)
@@ -837,7 +824,7 @@ void kbasep_kinstr_jm_atom_state(
 	struct kbase_kinstr_jm *const ctx = kctx->kinstr_jm;
 	const u8 id = kbase_jd_atom_id(kctx, katom);
 	struct kbase_kinstr_jm_atom_state_change change = {
-		.timestamp = timestamp(), .atom = id, .state = state
+		.timestamp = ktime_get_raw_ns(), .atom = id, .state = state
 	};
 	struct reader *reader;
 	struct hlist_bl_node *node;
@@ -847,7 +834,7 @@ void kbasep_kinstr_jm_atom_state(
 
 	switch (state) {
 	case KBASE_KINSTR_JM_READER_ATOM_STATE_START:
-		change.data.start.slot = katom->jobslot;
+		change.data.start.slot = katom->slot_nr;
 		break;
 	default:
 		break;

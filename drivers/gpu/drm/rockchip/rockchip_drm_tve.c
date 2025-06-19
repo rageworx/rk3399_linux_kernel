@@ -1,15 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/module.h>
-#include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/hdmi.h>
 #include <linux/mutex.h>
-#include <linux/mfd/syscon.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/of_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/regmap.h>
 
 #include <drm/drmP.h>
 #include <drm/drm_atomic_helper.h>
@@ -38,22 +35,14 @@ static const struct drm_display_mode cvbs_mode[] = {
 		   .vrefresh = 60, 0, },
 };
 
-#define tve_writel(offset, v)		writel_relaxed(v, tve->regbase + (offset))
-#define tve_readl(offset)		readl_relaxed(tve->regbase + (offset))
+#define tve_writel(offset, v)	writel_relaxed(v, tve->regbase + (offset))
+#define tve_readl(offset)	readl_relaxed(tve->regbase + (offset))
 
-#define tve_dac_writel(offset, v)	writel_relaxed(v, tve->vdacbase + (offset))
-#define tve_dac_readl(offset)		readl_relaxed(tve->vdacbase + (offset))
+#define tve_dac_writel(offset, v)   writel_relaxed(v, tve->vdacbase + (offset))
+#define tve_dac_readl(offset)	readl_relaxed(tve->vdacbase + (offset))
 
-#define tve_dac_grf_writel(offset, v)	regmap_write(tve->dac_grf, offset, v)
-#define tve_dac_grf_readl(offset, v)	regmap_read(tve->dac_grf, offset, v)
-
-#define connector_to_tve(x)		container_of(x, struct rockchip_tve, connector)
-#define encoder_to_tve(x)		container_of(x, struct rockchip_tve, encoder)
-
-struct rockchip_tve_data {
-	int input_format;
-	int soc_type;
-};
+#define connector_to_tve(x) container_of(x, struct rockchip_tve, connector)
+#define encoder_to_tve(x) container_of(x, struct rockchip_tve, encoder)
 
 static int
 rockchip_tve_get_modes(struct drm_connector *connector)
@@ -110,7 +99,7 @@ static void tve_set_mode(struct rockchip_tve *tve)
 	int mode = tve->tv_format;
 
 	dev_dbg(tve->dev, "tve set mode:%d\n", mode);
-	if (tve->input_format == INPUT_FORMAT_RGB)
+	if (tve->inputformat == INPUT_FORMAT_RGB)
 		tve_writel(TV_CTRL, v_CVBS_MODE(mode) | v_CLK_UPSTREAM_EN(2) |
 			   v_TIMING_EN(2) | v_LUMA_FILTER_GAIN(0) |
 			   v_LUMA_FILTER_UPSAMPLE(1) | v_CSC_PATH(0));
@@ -175,38 +164,17 @@ static void dac_init(struct rockchip_tve *tve)
 
 static void dac_enable(struct rockchip_tve *tve, bool enable)
 {
-	u32 mask = 0;
-	u32 val = 0;
-	u32 grfreg = 0;
+	u32 val;
 
 	if (enable) {
 		dev_dbg(tve->dev, "dac enable\n");
-
-		mask = m_VBG_EN | m_DAC_EN | m_DAC_GAIN;
-		if (tve->soc_type == SOC_RK3036) {
-			val = m_VBG_EN | m_DAC_EN | v_DAC_GAIN(tve->daclevel);
-			grfreg = RK3036_GRF_SOC_CON3;
-		} else if (tve->soc_type == SOC_RK312X) {
-			val = m_VBG_EN | m_DAC_EN | v_DAC_GAIN(tve->daclevel);
-			grfreg = RK312X_GRF_TVE_CON;
-		} else if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328) {
-			val = v_CUR_REG(tve->dac1level) | v_DR_PWR_DOWN(0) | v_BG_PWR_DOWN(0);
-		}
+		val = 0x70;
 	} else {
 		dev_dbg(tve->dev, "dac disable\n");
-
-		mask = m_VBG_EN | m_DAC_EN;
-		if (tve->soc_type == SOC_RK312X)
-			grfreg = RK312X_GRF_TVE_CON;
-		else if (tve->soc_type == SOC_RK3036)
-			grfreg = RK3036_GRF_SOC_CON3;
-		else if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328)
-			val = v_CUR_REG(tve->dac1level) | m_DR_PWR_DOWN | m_BG_PWR_DOWN;
+		val = v_CUR_REG(0x7) | m_DR_PWR_DOWN | m_BG_PWR_DOWN;
 	}
 
-	if (grfreg)
-		tve_dac_grf_writel(grfreg, (mask << 16) | val);
-	else if (tve->vdacbase)
+	if (tve->vdacbase)
 		tve_dac_writel(VDAC_VDAC1, val);
 }
 
@@ -337,7 +305,6 @@ static const struct drm_encoder_funcs rockchip_tve_encoder_funcs = {
 };
 
 static const struct drm_connector_funcs rockchip_tve_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = rockchip_tve_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rockchip_tve_connector_destroy,
@@ -408,37 +375,33 @@ static int tve_parse_dt(struct device_node *np,
 		return -EINVAL;
 	} else {
 		tve->daclevel = val;
-		if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328) {
-			cell = nvmem_cell_get(tve->dev, "tve_dac_adj");
-			if (IS_ERR(cell)) {
-				dev_dbg(tve->dev, "failed to get id cell: %ld\n", PTR_ERR(cell));
-			} else {
-				efuse_buf = nvmem_cell_read(cell, &len);
-				nvmem_cell_put(cell);
-				if (IS_ERR(efuse_buf))
-					return PTR_ERR(efuse_buf);
-				if (len == 1)
-					getdac = efuse_buf[0];
-				kfree(efuse_buf);
+		cell = nvmem_cell_get(tve->dev, "tve_dac_adj");
+		if (IS_ERR(cell)) {
+			dev_dbg(tve->dev,
+				"failed to get id cell: %ld\n", PTR_ERR(cell));
+		} else {
+			efuse_buf = nvmem_cell_read(cell, &len);
+			nvmem_cell_put(cell);
+			if (len == 1)
+				getdac = efuse_buf[0];
+			kfree(efuse_buf);
 
-				if (getdac > 0) {
-					tve->daclevel = getdac + 5 + val - RK322X_VDAC_STANDARD;
-					if (tve->daclevel > 0x3f) {
-						dev_err(tve->dev, "rk322x daclevel error!\n");
-						tve->daclevel = val;
-					}
+			if (getdac > 0) {
+				tve->daclevel =
+				getdac + 5 + val - RK322X_VDAC_STANDARD;
+				if (tve->daclevel > 0x3f) {
+					dev_err(tve->dev,
+						"rk322x daclevel error!\n");
+					tve->daclevel = val;
 				}
 			}
 		}
 	}
 
-	if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328) {
-		ret = of_property_read_u32(np, "rockchip,dac1level", &val);
-		if ((val == 0) || (ret < 0))
-			return -EINVAL;
-		tve->dac1level = val;
-	}
-
+	ret = of_property_read_u32(np, "rockchip,dac1level", &val);
+	if ((val == 0) || (ret < 0))
+		return -EINVAL;
+	tve->dac1level = val;
 
 	return 0;
 }
@@ -447,13 +410,11 @@ static void check_uboot_logo(struct rockchip_tve *tve)
 {
 	int lumafilter0, lumafilter1, lumafilter2, vdac;
 
-	if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328) {
-		vdac = tve_dac_readl(VDAC_VDAC1);
-		/* Whether the dac power has been turned down. */
-		if (vdac & m_DR_PWR_DOWN) {
-			tve->connector.dpms = DRM_MODE_DPMS_OFF;
-			return;
-		}
+	vdac = tve_dac_readl(VDAC_VDAC1);
+	/* Whether the dac power has been turned down. */
+	if (vdac & m_DR_PWR_DOWN) {
+		tve->connector.dpms = DRM_MODE_DPMS_OFF;
+		return;
 	}
 
 	lumafilter0 = tve_readl(TV_LUMA_FILTER0);
@@ -471,37 +432,14 @@ static void check_uboot_logo(struct rockchip_tve *tve)
 		return;
 	}
 
-	if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328)
-		dac_init(tve);
-
+	dac_init(tve);
 	tve->connector.dpms = DRM_MODE_DPMS_OFF;
 }
 
-static const struct rockchip_tve_data rk3036_tve = {
-	.soc_type = SOC_RK3036,
-	.input_format = INPUT_FORMAT_RGB,
-};
-
-static const struct rockchip_tve_data rk312x_tve = {
-	.soc_type = SOC_RK312X,
-	.input_format = INPUT_FORMAT_RGB,
-};
-
-static const struct rockchip_tve_data rk322x_tve = {
-	.soc_type = SOC_RK322X,
-	.input_format = INPUT_FORMAT_YUV,
-};
-
-static const struct rockchip_tve_data rk3328_tve = {
-	.soc_type = SOC_RK3328,
-	.input_format = INPUT_FORMAT_YUV,
-};
-
 static const struct of_device_id rockchip_tve_dt_ids[] = {
-	{ .compatible = "rockchip,rk3036-tve", .data = &rk3036_tve },
-	{ .compatible = "rockchip,rk312x-tve", .data = &rk312x_tve },
-	{ .compatible = "rockchip,rk322x-tve", .data = &rk322x_tve },
-	{ .compatible = "rockchip,rk3328-tve", .data = &rk3328_tve },
+	{
+		.compatible = "rockchip,rk3328-tve",
+	},
 	{}
 };
 
@@ -514,7 +452,6 @@ static int rockchip_tve_bind(struct device *dev, struct device *master,
 	struct drm_device *drm_dev = data;
 	struct device_node *np = dev->of_node;
 	const struct of_device_id *match;
-	const struct rockchip_tve_data *tve_data;
 	struct rockchip_tve *tve;
 	struct resource *res;
 	struct drm_encoder *encoder;
@@ -532,10 +469,11 @@ static int rockchip_tve_bind(struct device *dev, struct device *master,
 	}
 
 	tve->dev = &pdev->dev;
-	tve_data = of_device_get_match_data(dev);
-	if (tve_data) {
-		tve->soc_type = tve_data->soc_type;
-		tve->input_format = tve_data->input_format;
+	if (!strcmp(match->compatible, "rockchip,rk3328-tve")) {
+		tve->inputformat = INPUT_FORMAT_YUV;
+	} else {
+		dev_err(tve->dev, "It is not a valid tv encoder! ");
+		return -ENOMEM;
 	}
 
 	ret = tve_parse_dt(np, tve);
@@ -553,55 +491,37 @@ static int rockchip_tve_bind(struct device *dev, struct device *master,
 	tve->regbase = devm_ioremap(tve->dev, res->start, tve->len);
 	if (IS_ERR(tve->regbase)) {
 		dev_err(tve->dev,
-			"tv encoder device map registers failed!");
+			"rk3328 tv encoder device map registers failed!");
 		return PTR_ERR(tve->regbase);
 	}
 
-	if (tve->soc_type == SOC_RK322X || tve->soc_type == SOC_RK3328) {
-		res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-		tve->len = resource_size(res);
-		tve->vdacbase = devm_ioremap(tve->dev, res->start, tve->len);
-		if (IS_ERR(tve->vdacbase)) {
-			dev_err(tve->dev, "tv encoder device dac map registers failed!");
-			return PTR_ERR(tve->vdacbase);
-		}
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	tve->len = resource_size(res);
+	tve->vdacbase = devm_ioremap(tve->dev, res->start, tve->len);
+	if (IS_ERR(tve->vdacbase)) {
+		dev_err(tve->dev,
+			"rk3328 tv encoder device dac map registers failed!");
+		return PTR_ERR(tve->vdacbase);
 	}
-
-	if (tve->soc_type == SOC_RK3036) {
-		tve->aclk = devm_clk_get(tve->dev, "aclk");
-		if (IS_ERR(tve->aclk)) {
-			dev_err(tve->dev, "Unable to get tve aclk\n");
-			return PTR_ERR(tve->aclk);
-		}
-
-		ret = clk_prepare_enable(tve->aclk);
-		if (ret) {
-			dev_err(tve->dev, "Cannot enable tve aclk: %d\n", ret);
-			return ret;
-		}
-	}
-
-	tve->dac_grf = syscon_regmap_lookup_by_phandle(dev->of_node, "rockchip,grf");
 
 	mutex_init(&tve->suspend_lock);
 	check_uboot_logo(tve);
 	tve->tv_format = TVOUT_CVBS_PAL;
 	encoder = &tve->encoder;
-	encoder->possible_crtcs = drm_of_find_possible_crtcs(drm_dev,
-							     dev->of_node);
+	encoder->possible_crtcs = rockchip_drm_of_find_possible_crtcs(drm_dev,
+								      dev->of_node);
 	dev_dbg(tve->dev, "possible_crtc:%d\n", encoder->possible_crtcs);
 
 	ret = drm_encoder_init(drm_dev, encoder, &rockchip_tve_encoder_funcs,
 			       DRM_MODE_ENCODER_TVDAC, NULL);
 	if (ret < 0) {
 		dev_err(tve->dev, "failed to initialize encoder with drm\n");
-		goto err_disable_aclk;
+		return ret;
 	}
 
 	drm_encoder_helper_add(encoder, &rockchip_tve_encoder_helper_funcs);
 
 	connector = &tve->connector;
-	connector->port = dev->of_node;
 	connector->interlace_allowed = 1;
 	ret = drm_connector_init(drm_dev, connector,
 				 &rockchip_tve_connector_funcs,
@@ -614,11 +534,14 @@ static int rockchip_tve_bind(struct device *dev, struct device *master,
 	drm_connector_helper_add(connector,
 				 &rockchip_tve_connector_helper_funcs);
 
-	ret = drm_mode_connector_attach_encoder(connector, encoder);
+	ret = drm_connector_attach_encoder(connector, encoder);
 	if (ret < 0) {
 		dev_dbg(tve->dev, "failed to attach connector and encoder\n");
 		goto err_free_connector;
 	}
+	tve->sub_dev.connector = &tve->connector;
+	tve->sub_dev.of_node = tve->dev->of_node;
+	rockchip_drm_register_sub_dev(&tve->sub_dev);
 
 	pm_runtime_enable(dev);
 	dev_dbg(tve->dev, "%s tv encoder probe ok\n", match->compatible);
@@ -629,10 +552,6 @@ err_free_connector:
 	drm_connector_cleanup(connector);
 err_free_encoder:
 	drm_encoder_cleanup(encoder);
-err_disable_aclk:
-	if (tve->soc_type == SOC_RK3036)
-		clk_disable_unprepare(tve->aclk);
-
 	return ret;
 }
 
@@ -641,6 +560,7 @@ static void rockchip_tve_unbind(struct device *dev, struct device *master,
 {
 	struct rockchip_tve *tve = dev_get_drvdata(dev);
 
+	rockchip_drm_unregister_sub_dev(&tve->sub_dev);
 	rockchip_tve_encoder_disable(&tve->encoder);
 
 	drm_connector_cleanup(&tve->connector);
@@ -689,7 +609,6 @@ struct platform_driver rockchip_tve_driver = {
 		   .of_match_table = of_match_ptr(rockchip_tve_dt_ids),
 	},
 };
-module_platform_driver(rockchip_tve_driver);
 
 MODULE_AUTHOR("Algea Cao <Algea.cao@rock-chips.com>");
 MODULE_DESCRIPTION("ROCKCHIP TVE Driver");

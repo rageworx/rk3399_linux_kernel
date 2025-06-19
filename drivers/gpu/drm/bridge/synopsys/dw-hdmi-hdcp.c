@@ -13,7 +13,6 @@
  */
 
 #include <linux/clk.h>
-#include <linux/cryptohash.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/hdmi.h>
@@ -25,6 +24,7 @@
 #include <linux/of_device.h>
 #include <linux/spinlock.h>
 #include <linux/soc/rockchip/rk_vendor_storage.h>
+#include <crypto/sha.h>
 #include <drm/bridge/dw_hdmi.h>
 
 #include "dw-hdmi.h"
@@ -56,6 +56,13 @@
 #define HDMI_HDCP2REG_CTRL	0x7904
 #define HDMI_HDCP2REG_MASK	0x790c
 #define HDMI_HDCP2REG_MUTE	0x790e
+
+enum dw_hdmi_hdcp_state {
+	DW_HDCP_DISABLED,
+	DW_HDCP_AUTH_START,
+	DW_HDCP_AUTH_SUCCESS,
+	DW_HDCP_AUTH_FAIL,
+};
 
 enum {
 	DW_HDMI_HDCP_KSV_LEN = 8,
@@ -142,14 +149,14 @@ static void sha_reset(struct sha_t *sha)
 	for (i = 0; i < sizeof(sha->mlength); i++)
 		sha->mlength[i] = 0;
 
-	sha_init(sha->mdigest);
+	sha1_init(sha->mdigest);
 }
 
 static void sha_processblock(struct sha_t *sha)
 {
-	u32 array[SHA_WORKSPACE_WORDS];
+	u32 array[SHA1_WORKSPACE_WORDS];
 
-	sha_transform(sha->mdigest, sha->mblock, array);
+	sha1_transform(sha->mdigest, sha->mblock, array);
 	sha->mindex = 0;
 }
 
@@ -268,18 +275,14 @@ static int hdcp_load_keys_cb(struct dw_hdcp *hdcp)
 	hdcp->seeds = kmalloc(HDCP_KEY_SEED_SIZE, GFP_KERNEL);
 	if (!hdcp->seeds) {
 		kfree(hdcp->keys);
-		hdcp->keys = NULL;
 		return -ENOMEM;
 	}
 
 	size = rk_vendor_read(HDMI_HDCP1X_ID, hdcp_vendor_data, 314);
 	if (size < (HDCP_KEY_SIZE + HDCP_KEY_SEED_SIZE)) {
 		dev_dbg(hdcp->dev, "HDCP: read size %d\n", size);
-		kfree(hdcp->keys);
-		hdcp->keys = NULL;
-		kfree(hdcp->seeds);
-		hdcp->seeds = NULL;
-		return size;
+		memset(hdcp->keys, 0, HDCP_KEY_SIZE);
+		memset(hdcp->seeds, 0, HDCP_KEY_SEED_SIZE);
 	} else {
 		memcpy(hdcp->keys, hdcp_vendor_data, HDCP_KEY_SIZE);
 		memcpy(hdcp->seeds, hdcp_vendor_data + HDCP_KEY_SIZE,
@@ -298,10 +301,8 @@ static int dw_hdmi_hdcp_load_key(struct dw_hdcp *hdcp)
 
 	if (!hdcp->keys) {
 		ret = hdcp_load_keys_cb(hdcp);
-		if (ret) {
-			dev_err(hdcp->dev, "HDCP: load key failed\n");
+		if (ret)
 			return ret;
-		}
 	}
 	hdcp_keys = hdcp->keys;
 
@@ -364,8 +365,7 @@ static int dw_hdmi_hdcp_start(struct dw_hdcp *hdcp)
 		return -EPERM;
 
 	if (!(hdcp->read(hdmi, HDMI_HDCPREG_RMSTS) & 0x3f))
-		if (dw_hdmi_hdcp_load_key(hdcp))
-			return -EINVAL;
+		dw_hdmi_hdcp_load_key(hdcp);
 
 	hdcp_modb(hdcp, HDMI_FC_INVIDCONF_HDCP_KEEPOUT_ACTIVE,
 		  HDMI_FC_INVIDCONF_HDCP_KEEPOUT_MASK,
@@ -593,12 +593,10 @@ static ssize_t hdcp_enable_write(struct device *device,
 
 	if (hdcp->enable != enable) {
 		if (enable) {
+			hdcp->enable = enable;
 			if (hdcp->read(hdcp->hdmi, HDMI_PHY_STAT0) &
-			    HDMI_PHY_HPD) {
-				if (dw_hdmi_hdcp_start(hdcp))
-					return -EINVAL;
-				hdcp->enable = enable;
-			}
+			    HDMI_PHY_HPD)
+				dw_hdmi_hdcp_start(hdcp);
 		} else {
 			dw_hdmi_hdcp_stop(hdcp);
 			hdcp->enable = enable;
