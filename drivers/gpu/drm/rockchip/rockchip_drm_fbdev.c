@@ -15,12 +15,14 @@
 #include "rockchip_drm_fbdev.h"
 
 #define PREFERRED_BPP		32
+#define to_drm_private(x) \
+		container_of(x, struct rockchip_drm_private, fbdev_helper)
 
 static int rockchip_fbdev_mmap(struct fb_info *info,
 			       struct vm_area_struct *vma)
 {
 	struct drm_fb_helper *helper = info->par;
-	struct rockchip_drm_private *private = helper->dev->dev_private;
+	struct rockchip_drm_private *private = to_drm_private(helper);
 
 	return rockchip_gem_mmap_buf(private->fbdev_bo, vma);
 }
@@ -37,7 +39,7 @@ static const struct fb_ops rockchip_drm_fbdev_ops = {
 static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 				     struct drm_fb_helper_surface_size *sizes)
 {
-	struct rockchip_drm_private *private = helper->dev->dev_private;
+	struct rockchip_drm_private *private = to_drm_private(helper);
 	struct drm_mode_fb_cmd2 mode_cmd = { 0 };
 	struct drm_device *dev = helper->dev;
 	struct rockchip_gem_object *rk_obj;
@@ -58,7 +60,7 @@ static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 
 	size = mode_cmd.pitches[0] * mode_cmd.height;
 
-	rk_obj = rockchip_gem_create_object(dev, size, true, 0);
+	rk_obj = rockchip_gem_create_object(dev, size, true);
 	if (IS_ERR(rk_obj))
 		return -ENOMEM;
 
@@ -101,7 +103,7 @@ static int rockchip_drm_fbdev_create(struct drm_fb_helper *helper,
 	return 0;
 
 out:
-	drm_gem_object_put(&rk_obj->base);
+	rockchip_gem_free_object(&rk_obj->base);
 	return ret;
 }
 
@@ -118,10 +120,7 @@ int rockchip_drm_fbdev_init(struct drm_device *dev)
 	if (!dev->mode_config.num_crtc || !dev->mode_config.num_connector)
 		return -EINVAL;
 
-	helper = devm_kzalloc(dev->dev, sizeof(*helper), GFP_KERNEL);
-	if (!helper)
-		return -ENOMEM;
-	private->fbdev_helper = helper;
+	helper = &private->fbdev_helper;
 
 	drm_fb_helper_prepare(dev, helper, &rockchip_drm_fb_helper_funcs);
 
@@ -151,10 +150,9 @@ err_drm_fb_helper_fini:
 void rockchip_drm_fbdev_fini(struct drm_device *dev)
 {
 	struct rockchip_drm_private *private = dev->dev_private;
-	struct drm_fb_helper *helper = private->fbdev_helper;
+	struct drm_fb_helper *helper;
 
-	if (!helper)
-		return;
+	helper = &private->fbdev_helper;
 
 	drm_fb_helper_unregister_fbi(helper);
 

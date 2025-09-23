@@ -498,15 +498,6 @@ config CMA
 
 	  If unsure, say "n".
 
-config CMA_INACTIVE
-	bool "CMA not active to system"
-	depends on CMA
-	help
-	  This forbids the CMA to active its pages to system memory, to keep
-	  page from CMA never be borrowed by system.
-
-	  If unsure, say "n".
-
 config CMA_DEBUG
 	bool "CMA debug messages (DEVELOPMENT)"
 	depends on DEBUG_KERNEL && CMA
@@ -521,20 +512,6 @@ config CMA_DEBUGFS
 	depends on CMA && DEBUG_FS
 	help
 	  Turns on the DebugFS interface for CMA.
-
-config CMA_DEBUGFS_BITMAP_HEX
-	bool "CMA debugfs add bitmap_hex node"
-	depends on CMA_DEBUGFS
-	help
-	  Turns on the bitmap_hex node under DEBUGFS, shows the bitmap in hex
-	  format.
-
-config CMA_SYSFS
-	bool "CMA information through sysfs interface"
-	depends on CMA && SYSFS
-	help
-	  This option exposes some sysfs attributes to get information
-	  from CMA.
 
 config CMA_AREAS
 	int "Maximum count of the CMA areas"
@@ -843,28 +820,6 @@ config PERCPU_STATS
 	  This feature collects and exposes statistics via debugfs. The
 	  information includes global and per chunk statistics, which can
 	  be used to help understand percpu memory usage.
-
-config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
-       def_bool n
-
-config SPECULATIVE_PAGE_FAULT
-       bool "Speculative page faults"
-       default y
-       depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
-       depends on MMU && SMP
-       help
-         Try to handle user space page faults without holding the mmap_sem.
-
-	 This should allow better concurrency for massively threaded process
-	 since the page fault handler will not wait for other threads memory
-	 layout change to be done, assuming that this change is done in another
-	 part of the process's memory space. This type of page fault is named
-	 speculative page fault.
-
-	 If the speculative page fault fails because of a concurrency is
-	 detected or because underlying PMD or PTE tables are not yet
-	 allocating, it is failing its processing and a classic page fault
-	 is then tried.
 
 config GUP_BENCHMARK
 	bool "Enable infrastructure for get_user_pages() and related calls benchmarking"

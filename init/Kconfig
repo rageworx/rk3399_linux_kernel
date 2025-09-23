@@ -68,6 +68,11 @@ config CC_HAS_ASM_GOTO_OUTPUT
 	depends on CC_HAS_ASM_GOTO
 	def_bool $(success,echo 'int foo(int x) { asm goto ("": "=r"(x) ::: bar); return x; bar: return 0; }' | $(CC) -x c - -c -o /dev/null)
 
+config CC_HAS_ASM_GOTO_TIED_OUTPUT
+	depends on CC_HAS_ASM_GOTO_OUTPUT
+	# Detect buggy gcc and clang, fixed in gcc-11 clang-14.
+	def_bool $(success,echo 'int foo(int *x) { asm goto (".long (%l[bar]) - .\n": "+m"(*x) ::: bar); return *x; bar: return 0; }' | $CC -x c - -c -o /dev/null)
+
 config TOOLS_SUPPORT_RELR
 	def_bool $(success,env "CC=$(CC)" "LD=$(LD)" "NM=$(NM)" "OBJCOPY=$(OBJCOPY)" $(srctree)/scripts/tools-support-relr.sh)
 
@@ -1215,17 +1220,6 @@ config SCHED_AUTOGROUP
 	  desktop applications.  Task group autogeneration is currently based
 	  upon task session.
 
-config RT_SOFTINT_OPTIMIZATION
-       bool "Improve RT scheduling during long softint execution"
-       depends on ARM64
-       depends on SMP
-       default n
-       help
-         Enable an optimization which tries to avoid placing RT tasks on CPUs
-	 occupied by nonpreemptible tasks, such as a long softint, or CPUs
-	 which may soon block preemptions, such as a CPU running a ksoftirq
-	 thread which handles slow softints.
-
 config SYSFS_DEPRECATED
 	bool "Enable deprecated sysfs features to support old userspace tools"
 	depends on SYSFS
@@ -1295,22 +1289,7 @@ if BLK_DEV_INITRD
 
 source "usr/Kconfig"
 
-config INITRD_ASYNC
-	bool "Initrd async"
-	depends on NO_GKI
-	help
-	  Init ramdisk async, can reduce kernel init time.
-
 endif
-
-config INITCALL_ASYNC
-	bool "Call initcall async"
-	depends on ROCKCHIP_THUNDER_BOOT
-	help
-	  Call same level initcall async in kthread.
-	  Kernel parameter "initcall_nr_threads" control how many threads.
-	  initcall_nr_threads default is 0, which disable intcall async.
-	  initcall_nr_threads=-1, auto selected the number of threads.
 
 config BOOT_CONFIG
 	bool "Boot config support"
@@ -1648,11 +1627,6 @@ config HAVE_ARCH_USERFAULTFD_WP
 	help
 	  Arch has userfaultfd write protection support
 
-config HAVE_ARCH_USERFAULTFD_MINOR
-	bool
-	help
-	  Arch has userfaultfd minor fault support
-
 config MEMBARRIER
 	bool "Enable membarrier() system call" if EXPERT
 	default y
@@ -1752,6 +1726,16 @@ config BPF_JIT_ALWAYS_ON
 config BPF_JIT_DEFAULT_ON
 	def_bool ARCH_WANT_DEFAULT_BPF_JIT || BPF_JIT_ALWAYS_ON
 	depends on HAVE_EBPF_JIT && BPF_JIT
+
+config BPF_UNPRIV_DEFAULT_OFF
+	bool "Disable unprivileged BPF by default"
+	depends on BPF_SYSCALL
+	help
+	  Disables unprivileged BPF by default by setting the corresponding
+	  /proc/sys/kernel/unprivileged_bpf_disabled knob to 2. An admin can
+	  still reenable it by setting it to 0 later on, or permanently
+	  disable it by setting it to 1 (from which no other transition to
+	  0 is possible anymore).
 
 source "kernel/bpf/preload/Kconfig"
 
@@ -1881,11 +1865,6 @@ config VM_EVENT_COUNTERS
 	  This option allows the disabling of the VM event counters
 	  on EXPERT systems.  /proc/vmstat will only show page counts
 	  if VM event counters are disabled.
-
-config SLUB_SYSFS
-	bool "Enable SLUB sysfs interface"
-	depends on SLUB && SYSFS
-	default y
 
 config SLUB_DEBUG
 	default y
@@ -2177,20 +2156,6 @@ config MODULE_SRCVERSION_ALL
 	  the version).  With this option, such a "srcversion" field
 	  will be created for all modules.  If unsure, say N.
 
-config MODULE_SCMVERSION
-	bool "SCM version for modules"
-	depends on LOCALVERSION_AUTO
-	help
-	  This enables the module attribute "scmversion" which can be used
-	  by developers to identify the SCM version of a given module, e.g.
-	  git sha1 or hg sha1. The SCM version can be queried by modinfo or
-	  via the sysfs node: /sys/modules/MODULENAME/scmversion. This is
-	  useful when the kernel or kernel modules are updated separately
-	  since that causes the vermagic of the kernel and the module to
-	  differ.
-
-	  If unsure, say N.
-
 config MODULE_SIG
 	bool "Module signature verification"
 	select MODULE_SIG_FORMAT
@@ -2371,7 +2336,7 @@ endif # MODULES
 
 config MODULES_TREE_LOOKUP
 	def_bool y
-	depends on PERF_EVENTS || TRACING || CFI_CLANG
+	depends on PERF_EVENTS || TRACING
 
 config INIT_ALL_POSSIBLE
 	bool
@@ -2416,7 +2381,3 @@ config ARCH_HAS_SYNC_CORE_BEFORE_USERMODE
 # <asm/syscall_wrapper.h>.
 config ARCH_HAS_SYSCALL_WRAPPER
 	def_bool n
-
-if !ROCKCHIP_MINI_KERNEL
-source "init/Kconfig.gki"
-endif

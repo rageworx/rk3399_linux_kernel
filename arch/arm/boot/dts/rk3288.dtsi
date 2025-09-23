@@ -576,9 +576,10 @@
 		clock-names = "tsadc", "apb_pclk";
 		resets = <&cru SRST_TSADC>;
 		reset-names = "tsadc-apb";
-		pinctrl-names = "gpio", "otpout";
+		pinctrl-names = "init", "default", "sleep";
 		pinctrl-0 = <&otp_pin>;
 		pinctrl-1 = <&otp_out>;
+		pinctrl-2 = <&otp_pin>;
 		#thermal-sensor-cells = <1>;
 		rockchip,grf = <&grf>;
 		rockchip,hw-tshut-temp = <95000>;
@@ -649,8 +650,8 @@
 		clock-names = "otg";
 		dr_mode = "otg";
 		g-np-tx-fifo-size = <16>;
-		g-rx-fifo-size = <280>;
-		g-tx-fifo-size = <256 128 128 64 32 16>;
+		g-rx-fifo-size = <275>;
+		g-tx-fifo-size = <256 128 128 64 64 32>;
 		phys = <&usbphy0>;
 		phy-names = "usb2-phy";
 		status = "disabled";
@@ -694,7 +695,7 @@
 		compatible = "rockchip,rk3288-pwm";
 		reg = <0x0 0xff680000 0x0 0x10>;
 		#pwm-cells = <3>;
-		pinctrl-names = "active";
+		pinctrl-names = "default";
 		pinctrl-0 = <&pwm0_pin>;
 		clocks = <&cru PCLK_RKPWM>;
 		clock-names = "pwm";
@@ -705,7 +706,7 @@
 		compatible = "rockchip,rk3288-pwm";
 		reg = <0x0 0xff680010 0x0 0x10>;
 		#pwm-cells = <3>;
-		pinctrl-names = "active";
+		pinctrl-names = "default";
 		pinctrl-0 = <&pwm1_pin>;
 		clocks = <&cru PCLK_RKPWM>;
 		clock-names = "pwm";
@@ -716,7 +717,7 @@
 		compatible = "rockchip,rk3288-pwm";
 		reg = <0x0 0xff680020 0x0 0x10>;
 		#pwm-cells = <3>;
-		pinctrl-names = "active";
+		pinctrl-names = "default";
 		pinctrl-0 = <&pwm2_pin>;
 		clocks = <&cru PCLK_RKPWM>;
 		clock-names = "pwm";
@@ -727,7 +728,7 @@
 		compatible = "rockchip,rk3288-pwm";
 		reg = <0x0 0xff680030 0x0 0x10>;
 		#pwm-cells = <3>;
-		pinctrl-names = "active";
+		pinctrl-names = "default";
 		pinctrl-0 = <&pwm3_pin>;
 		clocks = <&cru PCLK_RKPWM>;
 		clock-names = "pwm";
@@ -869,7 +870,6 @@
 			mode-recovery = <BOOT_RECOVERY>;
 			mode-bootloader = <BOOT_FASTBOOT>;
 			mode-loader = <BOOT_BL_DOWNLOAD>;
-			mode-ums = <BOOT_UMS>;
 		};
 	};
 
@@ -985,14 +985,12 @@
 		dma-names = "tx", "rx";
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2s0_bus>;
-		resets = <&cru SRST_I2S0>;
-		reset-names = "reset-m";
 		rockchip,playback-channels = <8>;
 		rockchip,capture-channels = <2>;
 		status = "disabled";
 	};
 
-	crypto: cypto-controller@ff8a0000 {
+	crypto: crypto@ff8a0000 {
 		compatible = "rockchip,rk3288-crypto";
 		reg = <0x0 0xff8a0000 0x0 0x4000>;
 		interrupts = <GIC_SPI 48 IRQ_TYPE_LEVEL_HIGH>;
@@ -1956,20 +1954,11 @@
 			pwm0_pin: pwm0-pin {
 				rockchip,pins = <7 RK_PA0 1 &pcfg_pull_none>;
 			};
-
-			pwm0_pin_pull_down: pwm0-pin-pull-down {
-				rockchip,pins = <7 RK_PA0 1 &pcfg_pull_down>;
-			};
-
 		};
 
 		pwm1 {
 			pwm1_pin: pwm1-pin {
 				rockchip,pins = <7 RK_PA1 1 &pcfg_pull_none>;
-			};
-
-			pwm1_pin_pull_down: pwm1-pin-pull-down {
-				rockchip,pins = <7 RK_PA1 1 &pcfg_pull_down>;
 			};
 		};
 
@@ -1977,19 +1966,11 @@
 			pwm2_pin: pwm2-pin {
 				rockchip,pins = <7 RK_PC6 3 &pcfg_pull_none>;
 			};
-
-			pwm2_pin_pull_down: pwm2-pin-pull-down {
-				rockchip,pins = <7 RK_PC6 3 &pcfg_pull_down>;
-			};
 		};
 
 		pwm3 {
 			pwm3_pin: pwm3-pin {
 				rockchip,pins = <7 RK_PC7 3 &pcfg_pull_none>;
-			};
-
-			pwm3_pin_pull_down: pwm3-pin-pull-down {
-				rockchip,pins = <7 RK_PC7 3 &pcfg_pull_down>;
 			};
 		};
 

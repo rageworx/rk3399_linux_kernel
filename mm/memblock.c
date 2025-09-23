@@ -97,26 +97,6 @@ struct pglist_data __refdata contig_page_data;
 EXPORT_SYMBOL(contig_page_data);
 #endif
 
-#if defined(CONFIG_ROCKCHIP_THUNDER_BOOT) && defined(CONFIG_SMP)
-static unsigned long defer_start __initdata;
-static unsigned long defer_end __initdata;
-
-#define DEFAULT_DEFER_FREE_BLOCK_SIZE SZ_256M
-static unsigned long defer_free_block_size __initdata =
-	DEFAULT_DEFER_FREE_BLOCK_SIZE;
-
-static int __init early_defer_free_block_size(char *p)
-{
-	defer_free_block_size = memparse(p, &p);
-
-	pr_debug("defer_free_block_size = 0x%lx\n", defer_free_block_size);
-
-	return 0;
-}
-
-early_param("defer_free_block_size", early_defer_free_block_size);
-#endif
-
 unsigned long max_low_pfn;
 unsigned long min_low_pfn;
 unsigned long max_pfn;
@@ -201,6 +181,8 @@ bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
 					phys_addr_t base, phys_addr_t size)
 {
 	unsigned long i;
+
+	memblock_cap_size(base, &size);
 
 	for (i = 0; i < type->cnt; i++)
 		if (memblock_addrs_overlap(base, size, type->regions[i].base,
@@ -384,14 +366,20 @@ void __init memblock_discard(void)
 		addr = __pa(memblock.reserved.regions);
 		size = PAGE_ALIGN(sizeof(struct memblock_region) *
 				  memblock.reserved.max);
-		__memblock_free_late(addr, size);
+		if (memblock_reserved_in_slab)
+			kfree(memblock.reserved.regions);
+		else
+			__memblock_free_late(addr, size);
 	}
 
 	if (memblock.memory.regions != memblock_memory_init_regions) {
 		addr = __pa(memblock.memory.regions);
 		size = PAGE_ALIGN(sizeof(struct memblock_region) *
 				  memblock.memory.max);
-		__memblock_free_late(addr, size);
+		if (memblock_memory_in_slab)
+			kfree(memblock.memory.regions);
+		else
+			__memblock_free_late(addr, size);
 	}
 
 	memblock_memory = NULL;
@@ -826,9 +814,6 @@ int __init_memblock memblock_free(phys_addr_t base, phys_addr_t size)
 	kmemleak_free_part_phys(base, size);
 	return memblock_remove_range(&memblock.reserved, base, size);
 }
-#ifdef CONFIG_ARCH_KEEP_MEMBLOCK
-EXPORT_SYMBOL_GPL(memblock_free);
-#endif
 
 int __init_memblock memblock_reserve(phys_addr_t base, phys_addr_t size)
 {
@@ -1406,9 +1391,6 @@ phys_addr_t __init memblock_phys_alloc_range(phys_addr_t size,
 					     phys_addr_t start,
 					     phys_addr_t end)
 {
-	memblock_dbg("%s: %llu bytes align=0x%llx from=%pa max_addr=%pa %pS\n",
-		     __func__, (u64)size, (u64)align, &start, &end,
-		     (void *)_RET_IP_);
 	return memblock_alloc_range_nid(size, align, start, end, NUMA_NO_NODE,
 					false);
 }
@@ -1646,7 +1628,6 @@ phys_addr_t __init_memblock memblock_end_of_DRAM(void)
 
 	return (memblock.memory.regions[idx].base + memblock.memory.regions[idx].size);
 }
-EXPORT_SYMBOL_GPL(memblock_end_of_DRAM);
 
 static phys_addr_t __init_memblock __find_max_addr(phys_addr_t limit)
 {
@@ -1819,7 +1800,6 @@ bool __init_memblock memblock_is_region_memory(phys_addr_t base, phys_addr_t siz
  */
 bool __init_memblock memblock_is_region_reserved(phys_addr_t base, phys_addr_t size)
 {
-	memblock_cap_size(base, &size);
 	return memblock_overlaps_region(&memblock.reserved, base, size);
 }
 
@@ -1933,28 +1913,6 @@ static void __init __free_pages_memory(unsigned long start, unsigned long end)
 	}
 }
 
-#if defined(CONFIG_ROCKCHIP_THUNDER_BOOT) && defined(CONFIG_SMP)
-int __init defer_free_memblock(void *unused)
-{
-	if (defer_start == 0)
-		return 0;
-
-	pr_debug("start = %ld, end = %ld\n", defer_start, defer_end);
-
-	__free_pages_memory(defer_start, defer_end);
-
-	totalram_pages_add(defer_end - defer_start);
-
-	pr_info("%s: size %luM free %luM [%luM - %luM] total %luM\n", __func__,
-		defer_free_block_size >> 20,
-		(defer_end - defer_start) >> (20 - PAGE_SHIFT),
-		defer_end >> (20 - PAGE_SHIFT),
-		defer_start >> (20 - PAGE_SHIFT),
-		totalram_pages() >> (20 - PAGE_SHIFT));
-	return 0;
-}
-#endif
-
 static unsigned long __init __free_memory_core(phys_addr_t start,
 				 phys_addr_t end)
 {
@@ -1964,15 +1922,6 @@ static unsigned long __init __free_memory_core(phys_addr_t start,
 
 	if (start_pfn >= end_pfn)
 		return 0;
-
-#if defined(CONFIG_ROCKCHIP_THUNDER_BOOT) && defined(CONFIG_SMP)
-	if ((end - start) > defer_free_block_size) {
-		defer_start = start_pfn;
-		defer_end = end_pfn;
-
-		return 0;
-	}
-#endif
 
 	__free_pages_memory(start_pfn, end_pfn);
 

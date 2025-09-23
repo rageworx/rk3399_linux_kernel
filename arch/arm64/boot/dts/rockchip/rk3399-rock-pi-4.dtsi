@@ -9,34 +9,8 @@
 #include <dt-bindings/pwm/pwm.h>
 #include "rk3399.dtsi"
 #include "rk3399-opp.dtsi"
-#include "rk3399-vop-clk-set.dtsi"
 
 / {
-	reserved-memory {
-		#address-cells = <2>;
-		#size-cells = <2>;
-		ranges;
-
-		drm_logo: drm-logo@00000000 {
-			compatible = "rockchip,drm-logo";
-			reg = <0x0 0x0 0x0 0x0>;
-		};
-
-		ramoops_mem: region@110000 {
-			reg = <0x0 0x110000 0x0 0xf0000>;
-			reg-names = "ramoops_mem";
-		};
-	};
-
-	ramoops: ramoops {
-		compatible = "ramoops";
-		record-size = <0x0 0x40000>;
-		console-size = <0x0 0x80000>;
-		ftrace-size = <0x0 0x00000>;
-		pmsg-size = <0x0 0x00000>;
-		memory-region = <&ramoops_mem>;
-	};
-
 	clkin_gmac: external-gmac-clock {
 		compatible = "fixed-clock";
 		clock-frequency = <125000000>;
@@ -51,21 +25,6 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_enable_h>;
 		reset-gpios = <&gpio0 RK_PB2 GPIO_ACTIVE_LOW>;
-	};
-
-	hdmi_sound: hdmi-sound {
-		status = "disabled";
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,name = "rockchip,hdmi";
-
-		simple-audio-card,cpu {
-			sound-dai = <&i2s2>;
-		};
-		simple-audio-card,codec {
-			sound-dai = <&hdmi>;
-		};
 	};
 
 	es8316_sound: es8316-sound {
@@ -83,15 +42,6 @@
 				sound-dai = <&es8316>;
 			};
 		};
-	};
-
-	rk_headset: rk-headset {
-		status = "okay";
-		compatible = "rockchip_headset";
-		headset_gpio = <&gpio1 RK_PA0 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&hp_det>;
-		io-channels = <&saradc 2>;
 	};
 
 	vcc12v_dcin: dc-12v {
@@ -132,6 +82,8 @@
 		regulator-name = "vcc3v3_pcie";
 		regulator-always-on;
 		regulator-boot-on;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
 		vin-supply = <&vcc5v0_sys>;
 	};
 
@@ -205,6 +157,7 @@
 			linux,default-trigger = "heartbeat";
 		};
 	};
+
 };
 
 &cpu_l0 {
@@ -257,16 +210,14 @@
 };
 
 &hdmi {
+	ddc-i2c-bus = <&i2c3>;
 	pinctrl-names = "default";
-	pinctrl-0 = <&hdmi_i2c_xfer>, <&hdmi_cec>;
-	#address-cells = <1>;
-	#size-cells = <0>;
-	#sound-dai-cells = <0>;
+	pinctrl-0 = <&hdmi_cec>;
 	status = "okay";
 };
 
-&hdmi_in_vopl {
-	status = "disabled";
+&hdmi_sound {
+	status = "okay";
 };
 
 &hdmi_sound {
@@ -510,7 +461,7 @@
 	i2c-scl-falling-time-ns = <15>;
 	status = "okay";
 
-	es8316: es8316@11 {
+	es8316: codec@11 {
 		compatible = "everest,es8316";
 		reg = <0x11>;
 		clocks = <&cru SCLK_I2S_8CH_OUT>;
@@ -521,6 +472,12 @@
 	};
 };
 
+&i2c3 {
+	i2c-scl-rising-time-ns = <450>;
+	i2c-scl-falling-time-ns = <15>;
+	status = "okay";
+};
+
 &i2c4 {
 	i2c-scl-rising-time-ns = <600>;
 	i2c-scl-falling-time-ns = <20>;
@@ -528,12 +485,10 @@
 };
 
 &i2s0 {
-	status = "okay";
 	rockchip,playback-channels = <2>;
 	rockchip,capture-channels = <2>;
 	#sound-dai-cells = <0>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&i2s0_8ch_bus>;
+	status = "okay";
 };
 
 &i2s1 {
@@ -550,9 +505,24 @@
 	status = "okay";
 
 	bt656-supply = <&vcc_3v0>;
-	audio-supply = <&vcc_3v0>;
+	audio-supply = <&vcc1v8_codec>;
 	sdmmc-supply = <&vcc_sdio>;
 	gpio1830-supply = <&vcc_3v0>;
+};
+
+&pcie0 {
+	ep-gpios = <&gpio4 RK_PD3 GPIO_ACTIVE_HIGH>;
+	num-lanes = <4>;
+	max-link-speed = <1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pcie_clkreqnb_cpm>;
+	vpcie12v-supply = <&vcc12v_dcin>;
+	vpcie3v3-supply = <&vcc3v3_pcie>;
+	status = "okay";
+};
+
+&pcie_phy {
+	status = "okay";
 };
 
 &pmu_io_domains {
@@ -658,21 +628,15 @@
 	i2s0 {
 		i2s0_8ch_bus: i2s0-8ch-bus {
 			rockchip,pins =
-				<3 RK_PD0 1 &pcfg_pull_none>,
-				<3 RK_PD1 1 &pcfg_pull_none>,
-				<3 RK_PD2 1 &pcfg_pull_none>,
-				<3 RK_PD3 1 &pcfg_pull_none>,
-				<3 RK_PD7 1 &pcfg_pull_none>;
+				<3 24 1 &pcfg_pull_none>,
+				<3 25 1 &pcfg_pull_none>,
+				<3 26 1 &pcfg_pull_none>,
+				<3 27 1 &pcfg_pull_none>,
+				<3 31 1 &pcfg_pull_none>;
 		};
 
 		i2s_8ch_mclk: i2s-8ch-mclk {
-			rockchip,pins = <4 RK_PA0 1 &pcfg_pull_none>;
-		};
-	};
-
-	headphone {
-		hp_det: hp-det {
-			rockchip,pins = <1 RK_PA0 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <4 0 1 &pcfg_pull_none>;
 		};
 	};
 };
@@ -811,8 +775,6 @@
 
 &vopb {
 	status = "okay";
-	assigned-clocks = <&cru DCLK_VOP0_DIV>;
-	assigned-clock-parents = <&cru PLL_CPLL>;
 };
 
 &vopb_mmu {
@@ -821,28 +783,8 @@
 
 &vopl {
 	status = "okay";
-	assigned-clocks = <&cru DCLK_VOP1_DIV>;
-	assigned-clock-parents = <&cru PLL_VPLL>;
 };
 
 &vopl_mmu {
 	status = "okay";
-};
-
-&display_subsystem {
-	status = "okay";
-
-	ports = <&vopb_out>, <&vopl_out>;
-	logo-memory-region = <&drm_logo>;
-
-	route {
-		route_hdmi: route-hdmi {
-			status = "okay";
-			logo,uboot = "logo.bmp";
-			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
-			charge_logo,mode = "center";
-			connect = <&vopb_out_hdmi>;
-		};
-	};
 };

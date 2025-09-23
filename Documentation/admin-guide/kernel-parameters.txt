@@ -289,20 +289,6 @@
 			do not want to use tracing_snapshot_alloc() as it needs
 			to be done where GFP_KERNEL allocations are allowed.
 
-	allow_file_spec_access
-			Allow speculative faults on file backed pages.
-			Speculative faults are enabled only for those vm_ops
-			that implement and return true for allow_speculation
-			callback.
-
-	allow_mismatched_32bit_el0 [ARM64]
-			Allow execve() of 32-bit applications and setting of the
-			PER_LINUX32 personality on systems where only a strict
-			subset of the CPUs support 32-bit EL0. When this
-			parameter is present, the set of CPUs supporting 32-bit
-			EL0 is indicated by /sys/devices/system/cpu/aarch32_el0
-			and hot-unplug operations may be restricted.
-
 	amd_iommu=	[HW,X86-64]
 			Pass parameters to the AMD IOMMU driver in the system.
 			Possible values are:
@@ -386,15 +372,6 @@
 
 	arcrimi=	[HW,NET] ARCnet - "RIM I" (entirely mem-mapped) cards
 			Format: <io>,<irq>,<nodeID>
-
-	arm64.nobti	[ARM64] Unconditionally disable Branch Target
-			Identification support
-
-	arm64.nopauth	[ARM64] Unconditionally disable Pointer Authentication
-			support
-
-	arm64.nomte	[ARM64] Unconditionally disable Memory Tagging Extension
-			support
 
 	ataflop=	[HW,M68k]
 
@@ -516,21 +493,16 @@
 	ccw_timeout_log	[S390]
 			See Documentation/s390/common_io.rst for details.
 
-	cgroup_disable=	[KNL] Disable a particular controller or optional feature
-			Format: {name of the controller(s) or feature(s) to disable}
+	cgroup_disable=	[KNL] Disable a particular controller
+			Format: {name of the controller(s) to disable}
 			The effects of cgroup_disable=foo are:
 			- foo isn't auto-mounted if you mount all cgroups in
 			  a single hierarchy
 			- foo isn't visible as an individually mountable
 			  subsystem
-			- if foo is an optional feature then the feature is
-			  disabled and corresponding cgroup files are not
-			  created
 			{Currently only "memory" controller deal with this and
 			cut the overhead, others just disable the usage. So
 			only cgroup_disable=memory is actually worthy}
-			Specifying "pressure" disables per-cgroup pressure
-			stall information accounting feature
 
 	cgroup_no_v1=	[KNL] Disable cgroup controllers and named hierarchies in v1
 			Format: { { controller | "all" | "named" }
@@ -1467,11 +1439,6 @@
 				to enforce probe and suspend/resume ordering.
 			rpm --	Like "on", but also use to order runtime PM.
 
-	fw_devlink.strict=<bool>
-			[KNL] Treat all inferred dependencies as mandatory
-			dependencies. This only applies for fw_devlink=on|rpm.
-			Format: <bool>
-
 	gamecon.map[2|3]=
 			[HW,JOY] Multisystem joystick and NES/SNES/PSX pad
 			support via parallel port (up to 5 devices per port)
@@ -1606,10 +1573,6 @@
 				If specified, z/VM IUCV HVC accepts connections
 				from listed z/VM user IDs only.
 
-	hvc_dcc.enable=	[ARM,ARM64]	Enable DCC driver at runtime. For GKI,
-				disabled at runtime by default to prevent
-				crashes in devices which do not support DCC.
-
 	hv_nopvspin	[X86,HYPER_V] Disables the paravirt spinlock optimizations
 				      which allow the hypervisor to 'idle' the
 				      guest on lock contention.
@@ -1654,6 +1617,8 @@
 			architectures force reset to be always executed
 	i8042.unlock	[HW] Unlock (ignore) the keylock
 	i8042.kbdreset	[HW] Reset device connected to KBD port
+	i8042.probe_defer
+			[HW] Allow deferred probing upon i8042 probe errors
 
 	i810=		[HW,DRM]
 
@@ -2302,19 +2267,6 @@
 			for all guests.
 			Default is 1 (enabled) if in 64-bit or 32-bit PAE mode.
 
-	kvm-arm.mode=
-			[KVM,ARM] Select one of KVM/arm64's modes of operation.
-
-			nvhe: Standard nVHE-based mode, without support for
-			      protected guests.
-
-			protected: nVHE-based mode with support for guests whose
-				   state is kept private from the host.
-				   Not valid if the kernel is running in EL2.
-
-			Defaults to VHE/nVHE based on hardware support and
-			the value of CONFIG_ARM64_VHE.
-
 	kvm-arm.vgic_v3_group0_trap=
 			[KVM,ARM] Trap guest accesses to GICv3 group-0
 			system registers
@@ -2344,8 +2296,12 @@
 			Default is 1 (enabled)
 
 	kvm-intel.emulate_invalid_guest_state=
-			[KVM,Intel] Enable emulation of invalid guest states
-			Default is 0 (disabled)
+			[KVM,Intel] Disable emulation of invalid guest state.
+			Ignored if kvm-intel.enable_unrestricted_guest=1, as
+			guest state is never invalid for unrestricted guests.
+			This param doesn't apply to nested guests (L2), as KVM
+			never emulates invalid L2 guest state.
+			Default is 1 (enabled)
 
 	kvm-intel.flexpriority=
 			[KVM,Intel] Disable FlexPriority feature (TPR shadow).
@@ -2916,6 +2872,7 @@
 					       kvm.nx_huge_pages=off [X86]
 					       no_entry_flush [PPC]
 					       no_uaccess_flush [PPC]
+					       mmio_stale_data=off [X86]
 
 				Exceptions:
 					       This does not have any effect on
@@ -2937,6 +2894,7 @@
 				Equivalent to: l1tf=flush,nosmt [X86]
 					       mds=full,nosmt [X86]
 					       tsx_async_abort=full,nosmt [X86]
+					       mmio_stale_data=full,nosmt [X86]
 
 	mminit_loglevel=
 			[KNL] When CONFIG_DEBUG_MEMORY_INIT is set, this
@@ -2945,6 +2903,40 @@
 			of 0 disables mminit logging and a level of 4 will
 			log everything. Information is printed at KERN_DEBUG
 			so loglevel=8 may also need to be specified.
+
+	mmio_stale_data=
+			[X86,INTEL] Control mitigation for the Processor
+			MMIO Stale Data vulnerabilities.
+
+			Processor MMIO Stale Data is a class of
+			vulnerabilities that may expose data after an MMIO
+			operation. Exposed data could originate or end in
+			the same CPU buffers as affected by MDS and TAA.
+			Therefore, similar to MDS and TAA, the mitigation
+			is to clear the affected CPU buffers.
+
+			This parameter controls the mitigation. The
+			options are:
+
+			full       - Enable mitigation on vulnerable CPUs
+
+			full,nosmt - Enable mitigation and disable SMT on
+				     vulnerable CPUs.
+
+			off        - Unconditionally disable mitigation
+
+			On MDS or TAA affected machines,
+			mmio_stale_data=off can be prevented by an active
+			MDS or TAA mitigation as these vulnerabilities are
+			mitigated with the same mechanism so in order to
+			disable this mitigation, you need to specify
+			mds=off and tsx_async_abort=off too.
+
+			Not specifying this option is equivalent to
+			mmio_stale_data=full.
+
+			For details see:
+			Documentation/admin-guide/hw-vuln/processor_mmio_stale_data.rst
 
 	module.sig_enforce
 			[KNL] When CONFIG_MODULE_SIG is set, this means that
@@ -2995,26 +2987,6 @@
 	multitce=off	[PPC]  This parameter disables the use of the pSeries
 			firmware feature for updating multiple TCE entries
 			at a time.
-
-	kswapd_per_node=
-			kswapd_per_node allows you to control the number of kswapd threads
-			running on the system. This provides the ability to devote additional
-			CPU resources toward proactive page replacement with the goal of
-			reducing direct reclaims. When direct reclaims are prevented, the CPU
-			consumed by them is prevented as well. Depending on the workload, the
-			result can cause aggregate CPU usage on the system to go up, down or
-			stay the same.
-
-			More aggressive page replacement can reduce direct reclaims which
-			cause latency for tasks and decrease throughput when doing filesystem
-			IO through the pagecache. Direct reclaims are recorded using the
-			allocstall counter in /proc/vmstat.
-
-			The range of acceptible values are 1-16. Always start with lower
-			values in the 2-6 range. Higher values should be justified with
-			testing. If direct reclaims occur in spite of high values, the cost
-			of direct reclaims (in latency) that occur can be higher due to
-			increased lock contention.
 
 	onenand.bdry=	[HW,MTD] Flex-OneNAND Boundary Configuration
 
@@ -3352,21 +3324,6 @@
 			in certain environments such as networked servers or
 			real-time systems.
 
-	no_hash_pointers
-			Force pointers printed to the console or buffers to be
-			unhashed.  By default, when a pointer is printed via %p
-			format string, that pointer is "hashed", i.e. obscured
-			by hashing the pointer value.  This is a security feature
-			that hides actual kernel addresses from unprivileged
-			users, but it also makes debugging the kernel more
-			difficult since unequal pointers can no longer be
-			compared.  However, if this command-line option is
-			specified, then all normal pointers will have their true
-			value printed.  Pointers printed via %pK may still be
-			hashed.  This option should only be specified when
-			debugging the kernel.  Please do not use on production
-			kernels.
-
 	nohibernate	[HIBERNATION] Disable hibernation and resume.
 
 	nohz=		[KNL] Boottime enable/disable dynamic ticks
@@ -3614,12 +3571,6 @@
 
 	panic_on_warn	panic() instead of WARN().  Useful to cause kdump
 			on a WARN().
-
-	pelt=		[KNL] Boot-time parameter changing the PELT half life in ms
-			Format: <int>
-			32: Set the half life to 32ms
-			8: Set the half life to 8ms
-			default: 32
 
 	crash_kexec_post_notifiers
 			Run kdump after running panic-notifiers and dumping
@@ -3913,6 +3864,14 @@
 		nomsi	Do not use MSI for native PCIe PME signaling (this makes
 			all PCIe root ports use INTx for all services).
 
+	pcie_rockchip_host.bus_scan_delay=	[PCIE] Delay in ms before
+			scanning PCIe bus in Rockchip PCIe host driver. Some PCIe
+			cards seem to need delays that can be several hundred ms.
+			If set to greater than or equal to 0 this parameter will
+			override delay that can be set in device tree.
+			Values less than 0 mean that this parameter is ignored.
+			default=-1
+
 	pcmv=		[HW,PCMCIA] BadgePAD 4
 
 	pd_ignore_unused
@@ -4119,6 +4078,12 @@
 			CPU's random number generator (if available) to
 			fully seed the kernel's CRNG. Default is controlled
 			by CONFIG_RANDOM_TRUST_CPU.
+
+	random.trust_bootloader={on,off}
+			[KNL] Enable or disable trusting the use of a
+			seed passed by the bootloader (if available) to
+			fully seed the kernel's CRNG. Default is controlled
+			by CONFIG_RANDOM_TRUST_BOOTLOADER.
 
 	ras=option[,option,...]	[KNL] RAS-specific options
 
@@ -5042,8 +5007,12 @@
 			Specific mitigations can also be selected manually:
 
 			retpoline	  - replace indirect branches
-			retpoline,generic - google's original retpoline
-			retpoline,amd     - AMD-specific minimal thunk
+			retpoline,generic - Retpolines
+			retpoline,lfence  - LFENCE; indirect branch
+			retpoline,amd     - alias for retpoline,lfence
+			eibrs		  - enhanced IBRS
+			eibrs,retpoline   - enhanced IBRS + Retpolines
+			eibrs,lfence      - enhanced IBRS + LFENCE
 
 			Not specifying this option is equivalent to
 			spectre_v2=auto.
@@ -5229,12 +5198,6 @@
 			to (for stacks growing down) resp. after (for stacks
 			growing up) the main stack are reserved for no other
 			mapping. Default value is 256 pages.
-
-	stack_depot_disable= [KNL]
-			Setting this to true through kernel command line will
-			disable the stack depot thereby saving the static memory
-			consumed by the stack hash table. By default this is set
-			to false.
 
 	stacktrace	[FTRACE]
 			Enabled the stack tracer on boot up.
@@ -6084,6 +6047,13 @@
 			delta of virtualized Xen timers, where lower values
 			improve timer resolution at the expense of processing
 			more timer interrupts.
+
+	xen.balloon_boot_timeout= [XEN]
+			The time (in seconds) to wait before giving up to boot
+			in case initial ballooning fails to free enough memory.
+			Applies only when running as HVM or PVH guest and
+			started with less memory configured than allowed at
+			max. Default is 180.
 
 	xen.event_eoi_delay=	[XEN]
 			How long to delay EOI handling in case of event

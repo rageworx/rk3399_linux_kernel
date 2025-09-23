@@ -79,8 +79,7 @@ struct fusb302_chip {
 	struct regulator *vbus;
 
 	spinlock_t irq_lock;
-	struct kthread_work irq_work;
-	struct kthread_worker *irq_wq;
+	struct work_struct irq_work;
 	bool irq_suspended;
 	bool irq_while_suspended;
 	struct gpio_desc *gpio_int_n;
@@ -344,11 +343,12 @@ static int fusb302_sw_reset(struct fusb302_chip *chip)
 	return ret;
 }
 
-static int fusb302_enable_tx_auto_retries(struct fusb302_chip *chip, u8 retry_count)
+static int fusb302_enable_tx_auto_retries(struct fusb302_chip *chip)
 {
 	int ret = 0;
 
-	ret = fusb302_i2c_set_bits(chip, FUSB_REG_CONTROL3, retry_count |
+	ret = fusb302_i2c_set_bits(chip, FUSB_REG_CONTROL3,
+				   FUSB_REG_CONTROL3_N_RETRIES_3 |
 				   FUSB_REG_CONTROL3_AUTO_RETRY);
 
 	return ret;
@@ -399,7 +399,7 @@ static int tcpm_init(struct tcpc_dev *dev)
 	ret = fusb302_sw_reset(chip);
 	if (ret < 0)
 		return ret;
-	ret = fusb302_enable_tx_auto_retries(chip, FUSB_REG_CONTROL3_N_RETRIES_3);
+	ret = fusb302_enable_tx_auto_retries(chip);
 	if (ret < 0)
 		return ret;
 	ret = fusb302_init_interrupt(chip);
@@ -676,6 +676,7 @@ static int tcpm_set_cc(struct tcpc_dev *dev, enum typec_cc_status cc)
 			goto done;
 		}
 		chip->intr_comp_chng = true;
+		chip->intr_bc_lvl = false;
 		break;
 	case TYPEC_CC_RD:
 		ret = fusb302_i2c_mask_write(chip, FUSB_REG_MASK,
@@ -683,11 +684,12 @@ static int tcpm_set_cc(struct tcpc_dev *dev, enum typec_cc_status cc)
 					     FUSB_REG_MASK_COMP_CHNG,
 					     FUSB_REG_MASK_COMP_CHNG);
 		if (ret < 0) {
-			fusb302_log(chip, "cannot set SNK interrupt, ret=%d",
+			fusb302_log(chip, "cannot set SRC interrupt, ret=%d",
 				    ret);
 			goto done;
 		}
 		chip->intr_bc_lvl = true;
+		chip->intr_comp_chng = false;
 		break;
 	default:
 		break;
@@ -1017,7 +1019,7 @@ static const char * const transmit_type_name[] = {
 };
 
 static int tcpm_pd_transmit(struct tcpc_dev *dev, enum tcpm_transmit_type type,
-			    const struct pd_message *msg, unsigned int negotiated_rev)
+			    const struct pd_message *msg)
 {
 	struct fusb302_chip *chip = container_of(dev, struct fusb302_chip,
 						 tcpc_dev);
@@ -1026,13 +1028,6 @@ static int tcpm_pd_transmit(struct tcpc_dev *dev, enum tcpm_transmit_type type,
 	mutex_lock(&chip->lock);
 	switch (type) {
 	case TCPC_TX_SOP:
-		/* nRetryCount 3 in P2.0 spec, whereas 2 in PD3.0 spec */
-		ret = fusb302_enable_tx_auto_retries(chip, negotiated_rev > PD_REV20 ?
-						     FUSB_REG_CONTROL3_N_RETRIES_2 :
-						     FUSB_REG_CONTROL3_N_RETRIES_3);
-		if (ret < 0)
-			fusb302_log(chip, "Cannot update retry count ret=%d", ret);
-
 		ret = fusb302_pd_send_message(chip, msg);
 		if (ret < 0)
 			fusb302_log(chip,
@@ -1482,15 +1477,16 @@ static irqreturn_t fusb302_irq_intn(int irq, void *dev_id)
 	if (chip->irq_suspended)
 		chip->irq_while_suspended = true;
 	else
-		kthread_queue_work(chip->irq_wq, &chip->irq_work);
+		schedule_work(&chip->irq_work);
 	spin_unlock_irqrestore(&chip->irq_lock, flags);
 
 	return IRQ_HANDLED;
 }
 
-static void fusb302_irq_work(struct kthread_work *work)
+static void fusb302_irq_work(struct work_struct *work)
 {
-	struct fusb302_chip *chip = container_of(work, struct fusb302_chip, irq_work);
+	struct fusb302_chip *chip = container_of(work, struct fusb302_chip,
+						 irq_work);
 	int ret = 0;
 	u8 interrupt;
 	u8 interrupta;
@@ -1717,13 +1713,8 @@ static int fusb302_probe(struct i2c_client *client,
 	if (!chip->wq)
 		return -ENOMEM;
 
-	chip->irq_wq = kthread_create_worker(0, dev_name(dev));
-	if (IS_ERR(chip->irq_wq))
-		return PTR_ERR(chip->irq_wq);
-	sched_set_fifo(chip->irq_wq->task);
-
 	spin_lock_init(&chip->irq_lock);
-	kthread_init_work(&chip->irq_work, fusb302_irq_work);
+	INIT_WORK(&chip->irq_work, fusb302_irq_work);
 	INIT_DELAYED_WORK(&chip->bc_lvl_handler, fusb302_bc_lvl_handler_work);
 	init_tcpc_dev(&chip->tcpc_dev);
 	fusb302_debugfs_init(chip);
@@ -1752,7 +1743,7 @@ static int fusb302_probe(struct i2c_client *client,
 	}
 
 	ret = request_irq(chip->gpio_int_n_irq, fusb302_irq_intn,
-			  IRQF_TRIGGER_LOW,
+			  IRQF_ONESHOT | IRQF_TRIGGER_LOW,
 			  "fsc_interrupt_int_n", chip);
 	if (ret < 0) {
 		dev_err(dev, "cannot request IRQ for GPIO Int_N, ret=%d", ret);
@@ -1779,7 +1770,7 @@ static int fusb302_remove(struct i2c_client *client)
 
 	disable_irq_wake(chip->gpio_int_n_irq);
 	free_irq(chip->gpio_int_n_irq, chip);
-	kthread_destroy_worker(chip->irq_wq);;
+	cancel_work_sync(&chip->irq_work);
 	cancel_delayed_work_sync(&chip->bc_lvl_handler);
 	tcpm_unregister_port(chip->tcpm_port);
 	fwnode_handle_put(chip->tcpc_dev.fwnode);
@@ -1799,7 +1790,7 @@ static int fusb302_pm_suspend(struct device *dev)
 	spin_unlock_irqrestore(&chip->irq_lock, flags);
 
 	/* Make sure any pending irq_work is finished before the bus suspends */
-	kthread_flush_worker(chip->irq_wq);
+	flush_work(&chip->irq_work);
 	return 0;
 }
 
@@ -1807,21 +1798,10 @@ static int fusb302_pm_resume(struct device *dev)
 {
 	struct fusb302_chip *chip = dev->driver_data;
 	unsigned long flags;
-	u8 pwr;
-	int ret = 0;
-
-	/*
-	 * When the power of fusb302 is lost or i2c read failed in PM S/R
-	 * process, we must reset the tcpm port first to ensure the devices
-	 * can attach again.
-	 */
-	ret = fusb302_i2c_read(chip, FUSB_REG_POWER, &pwr);
-	if (pwr != FUSB_REG_POWER_PWR_ALL || ret < 0)
-		tcpm_tcpc_reset(chip->tcpm_port);
 
 	spin_lock_irqsave(&chip->irq_lock, flags);
 	if (chip->irq_while_suspended) {
-		kthread_queue_work(chip->irq_wq, &chip->irq_work);
+		schedule_work(&chip->irq_work);
 		chip->irq_while_suspended = false;
 	}
 	chip->irq_suspended = false;

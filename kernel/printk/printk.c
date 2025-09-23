@@ -54,32 +54,11 @@
 #include <trace/events/initcall.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/printk.h>
-#undef CREATE_TRACE_POINTS
-#include <trace/hooks/printk.h>
-#include <trace/hooks/logbuf.h>
 
 #include "printk_ringbuffer.h"
 #include "console_cmdline.h"
 #include "braille.h"
 #include "internal.h"
-
-#ifdef CONFIG_PRINTK_TIME_FROM_ARM_ARCH_TIMER
-#include <clocksource/arm_arch_timer.h>
-static u64 get_local_clock(void)
-{
-	u64 ns;
-
-	ns = arch_timer_read_counter() * 1000;
-	do_div(ns, 24);
-
-	return ns;
-}
-#else
-static inline u64 get_local_clock(void)
-{
-	return local_clock();
-}
-#endif
 
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
@@ -167,8 +146,10 @@ static int __control_devkmsg(char *str)
 
 static int __init control_devkmsg(char *str)
 {
-	if (__control_devkmsg(str) < 0)
+	if (__control_devkmsg(str) < 0) {
+		pr_warn("printk.devkmsg: bad option string '%s'\n", str);
 		return 1;
+	}
 
 	/*
 	 * Set sysctl string accordingly:
@@ -187,7 +168,7 @@ static int __init control_devkmsg(char *str)
 	 */
 	devkmsg_log |= DEVKMSG_LOG_MASK_LOCK;
 
-	return 0;
+	return 1;
 }
 __setup("printk.devkmsg=", control_devkmsg);
 
@@ -478,14 +459,12 @@ char *log_buf_addr_get(void)
 {
 	return log_buf;
 }
-EXPORT_SYMBOL_GPL(log_buf_addr_get);
 
 /* Return log buffer size */
 u32 log_buf_len_get(void)
 {
 	return log_buf_len;
 }
-EXPORT_SYMBOL_GPL(log_buf_len_get);
 
 /*
  * Define how much of the log buffer we could take at maximum. The value
@@ -546,7 +525,7 @@ static int log_store(u32 caller_id, int facility, int level,
 	if (ts_nsec > 0)
 		r.info->ts_nsec = ts_nsec;
 	else
-		r.info->ts_nsec = get_local_clock();
+		r.info->ts_nsec = local_clock();
 	r.info->caller_id = caller_id;
 	if (dev_info)
 		memcpy(&r.info->dev_info, dev_info, sizeof(r.info->dev_info));
@@ -556,8 +535,6 @@ static int log_store(u32 caller_id, int facility, int level,
 		prb_commit(&e);
 	else
 		prb_final_commit(&e);
-
-	trace_android_vh_logbuf(prb, &r);
 
 	return (text_len + trunc_msg_len);
 }
@@ -1976,8 +1953,6 @@ static size_t log_output(int facility, int level, enum log_flags lflags,
 			} else {
 				prb_commit(&e);
 			}
-
-			trace_android_vh_logbuf_pr_cont(&r, text_len);
 			return text_len;
 		}
 	}
@@ -2240,8 +2215,15 @@ static int __init console_setup(char *str)
 	char *s, *options, *brl_options = NULL;
 	int idx;
 
-	if (str[0] == 0)
+	/*
+	 * console="" or console=null have been suggested as a way to
+	 * disable console output. Use ttynull that has been created
+	 * for exacly this purpose.
+	 */
+	if (str[0] == 0 || strcmp(str, "null") == 0) {
+		__add_preferred_console("ttynull", 0, NULL, NULL, true);
 		return 1;
+	}
 
 	if (_braille_console_setup(&str, &brl_options))
 		return 1;
@@ -2344,12 +2326,6 @@ void resume_console(void)
  */
 static int console_cpu_notify(unsigned int cpu)
 {
-	int flag = 0;
-
-	trace_android_vh_printk_hotplug(&flag);
-	if (flag)
-		return 0;
-
 	if (!cpuhp_tasks_frozen) {
 		/* If trylock fails, someone else is doing the printing */
 		if (console_trylock())
@@ -3132,7 +3108,6 @@ int printk_deferred(const char *fmt, ...)
 
 	return r;
 }
-EXPORT_SYMBOL_GPL(printk_deferred);
 
 /*
  * printk rate limiting, lifted from the networking subsystem.

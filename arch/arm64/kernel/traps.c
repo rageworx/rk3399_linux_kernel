@@ -46,8 +46,6 @@
 #include <asm/system_misc.h>
 #include <asm/sysreg.h>
 
-#include <trace/hooks/traps.h>
-
 static const char *handler[]= {
 	"Synchronous Abort",
 	"IRQ",
@@ -173,32 +171,32 @@ static void arm64_show_signal(int signo, const char *str)
 	__show_regs(regs);
 }
 
-void arm64_force_sig_fault(int signo, int code, unsigned long far,
+void arm64_force_sig_fault(int signo, int code, void __user *addr,
 			   const char *str)
 {
 	arm64_show_signal(signo, str);
 	if (signo == SIGKILL)
 		force_sig(SIGKILL);
 	else
-		force_sig_fault(signo, code, (void __user *)far);
+		force_sig_fault(signo, code, addr);
 }
 
-void arm64_force_sig_mceerr(int code, unsigned long far, short lsb,
+void arm64_force_sig_mceerr(int code, void __user *addr, short lsb,
 			    const char *str)
 {
 	arm64_show_signal(SIGBUS, str);
-	force_sig_mceerr(code, (void __user *)far, lsb);
+	force_sig_mceerr(code, addr, lsb);
 }
 
-void arm64_force_sig_ptrace_errno_trap(int errno, unsigned long far,
+void arm64_force_sig_ptrace_errno_trap(int errno, void __user *addr,
 				       const char *str)
 {
 	arm64_show_signal(SIGTRAP, str);
-	force_sig_ptrace_errno_trap(errno, (void __user *)far);
+	force_sig_ptrace_errno_trap(errno, addr);
 }
 
 void arm64_notify_die(const char *str, struct pt_regs *regs,
-		      int signo, int sicode, unsigned long far,
+		      int signo, int sicode, void __user *addr,
 		      int err)
 {
 	if (user_mode(regs)) {
@@ -206,7 +204,7 @@ void arm64_notify_die(const char *str, struct pt_regs *regs,
 		current->thread.fault_address = 0;
 		current->thread.fault_code = err;
 
-		arm64_force_sig_fault(signo, sicode, far, str);
+		arm64_force_sig_fault(signo, sicode, addr, str);
 	} else {
 		die(str, regs, err);
 	}
@@ -377,7 +375,7 @@ void force_signal_inject(int signal, int code, unsigned long address, unsigned i
 		signal = SIGKILL;
 	}
 
-	arm64_notify_die(desc, regs, signal, code, address, err);
+	arm64_notify_die(desc, regs, signal, code, (void __user *)address, err);
 }
 
 /*
@@ -388,7 +386,7 @@ void arm64_notify_segfault(unsigned long addr)
 	int code;
 
 	mmap_read_lock(current->mm);
-	if (find_vma(current->mm, untagged_addr(addr)) == NULL)
+	if (find_vma(current->mm, addr) == NULL)
 		code = SEGV_MAPERR;
 	else
 		code = SEGV_ACCERR;
@@ -406,7 +404,6 @@ void do_undefinstr(struct pt_regs *regs)
 	if (call_undef_hook(regs) == 0)
 		return;
 
-	trace_android_rvh_do_undefinstr(regs, user_mode(regs));
 	BUG_ON(!user_mode(regs));
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
 }
@@ -414,7 +411,6 @@ NOKPROBE_SYMBOL(do_undefinstr);
 
 void do_bti(struct pt_regs *regs)
 {
-	trace_android_rvh_do_bti(regs, user_mode(regs));
 	BUG_ON(!user_mode(regs));
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
 }
@@ -426,7 +422,6 @@ void do_ptrauth_fault(struct pt_regs *regs, unsigned int esr)
 	 * Unexpected FPAC exception or pointer authentication failure in
 	 * the kernel: kill the task before it does any more harm.
 	 */
-	trace_android_rvh_do_ptrauth_fault(regs, esr, user_mode(regs));
 	BUG_ON(!user_mode(regs));
 	force_signal_inject(SIGILL, ILL_ILLOPN, regs->pc, esr);
 }
@@ -454,13 +449,12 @@ NOKPROBE_SYMBOL(do_ptrauth_fault);
 
 static void user_cache_maint_handler(unsigned int esr, struct pt_regs *regs)
 {
-	unsigned long tagged_address, address;
+	unsigned long address;
 	int rt = ESR_ELx_SYS64_ISS_RT(esr);
 	int crm = (esr & ESR_ELx_SYS64_ISS_CRM_MASK) >> ESR_ELx_SYS64_ISS_CRM_SHIFT;
 	int ret = 0;
 
-	tagged_address = pt_regs_read_reg(regs, rt);
-	address = untagged_addr(tagged_address);
+	address = untagged_addr(pt_regs_read_reg(regs, rt));
 
 	switch (crm) {
 	case ESR_ELx_SYS64_ISS_CRM_DC_CVAU:	/* DC CVAU, gets promoted */
@@ -487,7 +481,7 @@ static void user_cache_maint_handler(unsigned int esr, struct pt_regs *regs)
 	}
 
 	if (ret)
-		arm64_notify_segfault(tagged_address);
+		arm64_notify_segfault(address);
 	else
 		arm64_skip_faulting_instruction(regs, AARCH64_INSN_SIZE);
 }
@@ -770,7 +764,6 @@ asmlinkage void notrace bad_mode(struct pt_regs *regs, int reason, unsigned int 
 		handler[reason], smp_processor_id(), esr,
 		esr_get_class_string(esr));
 
-	trace_android_rvh_bad_mode(regs, esr, reason);
 	__show_regs(regs);
 	local_daif_mask();
 	panic("bad mode");
@@ -782,7 +775,7 @@ asmlinkage void notrace bad_mode(struct pt_regs *regs, int reason, unsigned int 
  */
 void bad_el0_sync(struct pt_regs *regs, int reason, unsigned int esr)
 {
-	unsigned long pc = instruction_pointer(regs);
+	void __user *pc = (void __user *)instruction_pointer(regs);
 
 	current->thread.fault_address = 0;
 	current->thread.fault_code = esr;
@@ -836,8 +829,6 @@ void __noreturn arm64_serror_panic(struct pt_regs *regs, u32 esr)
 
 	pr_crit("SError Interrupt on CPU%d, code 0x%08x -- %s\n",
 		smp_processor_id(), esr, esr_get_class_string(esr));
-
-	trace_android_rvh_arm64_serror_panic(regs, esr);
 	if (regs)
 		__show_regs(regs);
 

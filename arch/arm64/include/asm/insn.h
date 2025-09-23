@@ -10,7 +10,8 @@
 #include <linux/build_bug.h>
 #include <linux/types.h>
 
-#include <asm/alternative.h>
+/* A64 instructions are always 32 bits. */
+#define	AARCH64_INSN_SIZE		4
 
 #ifndef __ASSEMBLY__
 /*
@@ -64,6 +65,7 @@ enum aarch64_insn_hint_cr_op {
 	AARCH64_INSN_HINT_PSB  = 0x11 << 5,
 	AARCH64_INSN_HINT_TSB  = 0x12 << 5,
 	AARCH64_INSN_HINT_CSDB = 0x14 << 5,
+	AARCH64_INSN_HINT_CLEARBHB = 0x16 << 5,
 
 	AARCH64_INSN_HINT_BTI   = 0x20 << 5,
 	AARCH64_INSN_HINT_BTIC  = 0x22 << 5,

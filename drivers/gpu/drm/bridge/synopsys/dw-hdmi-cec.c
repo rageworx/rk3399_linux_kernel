@@ -12,7 +12,6 @@
 #include <linux/slab.h>
 
 #include <drm/drm_edid.h>
-#include <drm/bridge/dw_hdmi.h>
 
 #include <media/cec.h>
 #include <media/cec-notifier.h>
@@ -262,8 +261,6 @@ static int dw_hdmi_cec_probe(struct platform_device *pdev)
 					 CEC_MAX_LOG_ADDRS);
 	if (IS_ERR(cec->adap))
 		return PTR_ERR(cec->adap);
-
-	dw_hdmi_set_cec_adap(cec->hdmi, cec->adap);
 
 	/* override the module pointer */
 	cec->adap->owner = THIS_MODULE;

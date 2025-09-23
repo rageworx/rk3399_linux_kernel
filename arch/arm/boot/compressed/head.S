@@ -165,13 +165,6 @@
 		orr	\res, \res, \tmp1, lsl #24
 		.endm
 
-		.macro	be32tocpu, val, tmp
-#ifndef __ARMEB__
-		/* convert to little endian */
-		rev_l	\val, \tmp
-#endif
-		.endm
-
 		.section ".start", "ax"
 /*
  * sort out different calling conventions
@@ -197,7 +190,8 @@ start:
 		 * were patching the initial instructions of the kernel, i.e
 		 * had started to exploit this "patch area".
 		 */
-		.rept	7
+		__initial_nops
+		.rept	5
 		__nop
 		.endr
 #ifndef CONFIG_THUMB2_KERNEL
@@ -276,8 +270,7 @@ not_angel:
 		mov	r4, pc
 		and	r4, r4, #0xf8000000
 		/* Determine final kernel image address. */
-		add	r4, r4, #(TEXT_OFFSET & 0xffff0000)
-		add	r4, r4, #(TEXT_OFFSET & 0x0000ffff)
+		add	r4, r4, #TEXT_OFFSET
 #else
 		ldr	r4, =zreladdr
 #endif
@@ -353,7 +346,13 @@ restart:	adr	r0, LC1
 
 		/* Get the initial DTB size */
 		ldr	r5, [r6, #4]
-		be32tocpu r5, r1
+#ifndef __ARMEB__
+		/* convert to little endian */
+		eor	r1, r5, r5, ror #16
+		bic	r1, r1, #0x00ff0000
+		mov	r5, r5, ror #8
+		eor	r5, r5, r1, lsr #8
+#endif
 		dbgadtb	r6, r5
 		/* 50% DTB growth should be good enough */
 		add	r5, r5, r5, lsr #1
@@ -379,8 +378,7 @@ restart:	adr	r0, LC1
 		 * of RAM and hope for the best.
 		 */
 		cmp	r0, #1
-		sub	r0, r4, #(TEXT_OFFSET & 0xffff0000)
-		sub	r0, r0, #(TEXT_OFFSET & 0x0000ffff)
+		sub	r0, r4, #TEXT_OFFSET
 		bic	r0, r0, #1
 		add	r0, r0, #0x100
 		mov	r1, r6
@@ -406,7 +404,13 @@ restart:	adr	r0, LC1
 
 		/* Get the current DTB size */
 		ldr	r5, [r6, #4]
-		be32tocpu r5, r1
+#ifndef __ARMEB__
+		/* convert r5 (dtb size) to little endian */
+		eor	r1, r5, r5, ror #16
+		bic	r1, r1, #0x00ff0000
+		mov	r5, r5, ror #8
+		eor	r5, r5, r1, lsr #8
+#endif
 
 		/* preserve 64-bit alignment */
 		add	r5, r5, #7
@@ -782,8 +786,8 @@ __setup_mmu:	sub	r3, r4, #16384		@ Page directory size
  * bits for the RAM area only.
  */
 		mov	r0, r3
-		mov	r9, r0, lsr #20
-		mov	r9, r9, lsl #20		@ start of RAM
+		mov	r9, r0, lsr #18
+		mov	r9, r9, lsl #18		@ start of RAM
 		add	r10, r9, #0x10000000	@ a reasonable RAM size
 		mov	r1, #0x12		@ XN|U + section mapping
 		orr	r1, r1, #3 << 10	@ AP=11

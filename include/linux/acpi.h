@@ -55,7 +55,7 @@ static inline struct fwnode_handle *acpi_alloc_fwnode_static(void)
 	if (!fwnode)
 		return NULL;
 
-	fwnode_init(fwnode, &acpi_static_fwnode_ops);
+	fwnode->ops = &acpi_static_fwnode_ops;
 
 	return fwnode;
 }
@@ -952,6 +952,15 @@ static inline struct acpi_device *acpi_resource_consumer(struct resource *res)
 {
 	return NULL;
 }
+
+static inline int acpi_register_wakeup_handler(int wake_irq,
+	bool (*wakeup)(void *context), void *context)
+{
+	return -ENXIO;
+}
+
+static inline void acpi_unregister_wakeup_handler(
+	bool (*wakeup)(void *context), void *context) { }
 
 #endif	/* !CONFIG_ACPI */
 
